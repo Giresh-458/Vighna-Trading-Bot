@@ -197,12 +197,15 @@ class Database:
                 row = cursor.fetchone()
                 return dict(row) if row else None
 
-    def update_live_tick(self, token: str, symbol: str, ltp: float):
-        import time
+    def update_live_tick(self, token: str, symbol: str, ltp: float, updated_at: str = None):
         from datetime import datetime, timezone
-        now_str = datetime.now(timezone.utc).isoformat()
-        self.execute("INSERT OR REPLACE INTO live_ticks (token, symbol, ltp, updated_at) VALUES (?, ?, ?, ?)",
-                     (str(token), symbol, float(ltp), now_str))
+        # Callers persisting WebSocket data should pass the original receipt timestamp,
+        # not the database-write time, or repeated polling would make an old tick look fresh.
+        timestamp = updated_at or datetime.now(timezone.utc).isoformat()
+        self.execute(
+            "INSERT OR REPLACE INTO live_ticks (token, symbol, ltp, updated_at) VALUES (?, ?, ?, ?)",
+            (str(token), symbol, float(ltp), timestamp),
+        )
 
     def get_all_live_ticks(self) -> Dict[str, float]:
         rows = self.fetch_all("SELECT token, ltp FROM live_ticks")
