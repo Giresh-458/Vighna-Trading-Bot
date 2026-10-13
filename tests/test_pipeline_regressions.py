@@ -273,6 +273,62 @@ def test_exit_database_failure_rolls_back_trade_and_keeps_position_open(tmp_path
     assert position["id"] in manager.active_positions
 
 
+def test_manual_close_command_stays_pending_when_exit_transaction_fails(tmp_path):
+    import json
+
+    db, portfolio, manager = make_sqlite_manager(tmp_path / "manual-exit-failure.sqlite3")
+    signal_id = manager.register_signal(make_signal(), make_instrument())
+    manager.execute_entry(signal_id, 10.0)
+    position = db.fetch_one("SELECT * FROM positions WHERE signal_id = ?", (signal_id,))
+    db.execute("""
+        CREATE TRIGGER fail_trade_insert BEFORE INSERT ON trades
+        BEGIN SELECT RAISE(ABORT, 'injected trade failure'); END
+    """)
+    command_id = db.execute(
+        "INSERT INTO commands (command, payload, status, created_at) VALUES (?, ?, 'PENDING', ?)",
+        ("CLOSE_POSITION", json.dumps({"pos_id": position["id"]}), "2026-10-13T10:00:00+00:00"),
+    )
+
+    cache = MagicMock()
+    cache.get_ltp.return_value = None
+    ws = MagicMock()
+    ws.auth.api.ltpData.return_value = {"status": True, "data": {"ltp": 15.0}}
+    engine = PaperEngine(cache, manager, ws)
+
+    engine.process_commands()
+
+    assert db.fetch_one("SELECT status FROM commands WHERE id = ?", (command_id,))["status"] == "PENDING"
+    assert db.fetch_one("SELECT status FROM positions WHERE id = ?", (position["id"],))["status"] == "OPEN"
+    assert position["id"] in manager.active_positions
+    assert db.fetch_all("SELECT * FROM trades WHERE position_id = ?", (position["id"],)) == []
+
+
+def test_manual_close_recovers_open_position_missing_from_memory(tmp_path):
+    import json
+
+    db, portfolio, manager = make_sqlite_manager(tmp_path / "manual-recovery.sqlite3")
+    signal_id = manager.register_signal(make_signal(), make_instrument())
+    manager.execute_entry(signal_id, 10.0)
+    position = db.fetch_one("SELECT * FROM positions WHERE signal_id = ?", (signal_id,))
+    manager.active_positions.clear()
+    command_id = db.execute(
+        "INSERT INTO commands (command, payload, status, created_at) VALUES (?, ?, 'PENDING', ?)",
+        ("CLOSE_POSITION", json.dumps({"pos_id": position["id"]}), "2026-10-13T10:00:00+00:00"),
+    )
+
+    cache = MagicMock()
+    cache.get_ltp.return_value = None
+    ws = MagicMock()
+    ws.auth.api.ltpData.return_value = {"status": False, "data": None}
+    engine = PaperEngine(cache, manager, ws)
+
+    engine.process_commands()
+
+    assert position["id"] in manager.active_positions
+    assert db.fetch_one("SELECT status FROM positions WHERE id = ?", (position["id"],))["status"] == "OPEN"
+    assert db.fetch_one("SELECT status FROM commands WHERE id = ?", (command_id,))["status"] == "PENDING"
+
+
 def test_persisted_tick_freshness_rejects_missing_and_stale_timestamps():
     from datetime import timezone
 
