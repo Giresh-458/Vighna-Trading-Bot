@@ -15,6 +15,8 @@ from app.instrument_manager import InstrumentManager
 from app.models import OptionType, ParsedSignal
 from app.paper_engine import PaperEngine
 from app.position_manager import PositionManager
+from app.signal_parser import SignalParser
+from app.market_data_cache import MarketDataCache
 
 
 def make_signal(message_id=101, channel_id=-1001):
@@ -132,6 +134,74 @@ def test_full_paper_trade_lifecycle_updates_one_shared_pool_once(tmp_path):
     assert manager.execute_exit(position["id"], 15.0, "TARGET_HIT") is False
     assert portfolio.available_margin == pytest.approx(INITIAL_CAPITAL + 122.0)
     assert len(db.fetch_all("SELECT * FROM trades WHERE position_id = ?", (position["id"],))) == 1
+
+
+def test_raw_signal_to_instrument_entry_and_target_exit_end_to_end(tmp_path, monkeypatch):
+    """Exercise the paper path from source text through the trade ledger."""
+    raw_message = """
+        #NIFTY 23450 CE
+        Entry - 10 - 11
+        Target - 15/18/20
+        SL - 8
+    """
+    signal = SignalParser.parse(raw_message)
+    assert signal is not None
+    signal.telegram_message_id = 987654
+    signal.channel_id = -100987
+
+    expiry = (date.today() + timedelta(days=30)).strftime("%d%b%Y").upper()
+    instrument_data = {
+        "exch_seg": "NFO",
+        "instrumenttype": "OPTIDX",
+        "symbol": f"NIFTY{expiry}23450CE",
+        "name": "NIFTY",
+        "strike": "2345000.000000",
+        "token": "98765001",
+        "expiry": expiry,
+        "lotsize": "25",
+    }
+    instruments = InstrumentManager()
+    instruments.CACHE_FILE = str(tmp_path / "missing-master.json")
+    instruments._build_indexes([instrument_data])
+    instruments.is_loaded = True
+    instrument, error = instruments.resolve_signal(signal)
+    assert instrument is not None, error
+
+    db, portfolio, manager = make_sqlite_manager(tmp_path / "end-to-end.sqlite3")
+    manager.inst_manager = instruments
+    signal_id = manager.register_signal(signal, instrument)
+    assert signal_id is not None
+
+    cache = MarketDataCache()
+    ws = MagicMock()
+    engine = PaperEngine(cache, manager, ws)
+    fixed_time = datetime(2026, 10, 13, 12, 0, tzinfo=paper_engine_module.IST)
+
+    with patch("app.paper_engine.datetime") as mock_datetime:
+        mock_datetime.now.return_value = fixed_time
+
+        # In-range, fresh WebSocket tick creates exactly one-lot paper position.
+        cache.update_tick(instrument["token"], 10.5)
+        engine.check_signals()
+        position = db.fetch_one("SELECT * FROM positions WHERE signal_id = ?", (signal_id,))
+        assert position is not None
+        assert position["quantity"] == 25
+        assert position["status"] == "OPEN"
+        assert portfolio.available_margin == pytest.approx(INITIAL_CAPITAL - 10.5 * 25)
+
+        # A fresh target tick closes the position and books P&L/capital atomically.
+        cache.update_tick(instrument["token"], 15.5)
+        engine.check_positions()
+
+    position = db.fetch_one("SELECT * FROM positions WHERE id = ?", (position["id"],))
+    trade = db.fetch_one("SELECT * FROM trades WHERE position_id = ?", (position["id"],))
+    assert position["status"] == "CLOSED"
+    assert position["exit_reason"] == "TARGET_HIT"
+    assert position["exit_price"] == pytest.approx(15.5)
+    assert trade["gross_pnl"] == pytest.approx(125.0)
+    assert trade["net_pnl"] == pytest.approx(122.0)
+    assert portfolio.available_margin == pytest.approx(INITIAL_CAPITAL + 122.0)
+    ws.unsubscribe.assert_called_once_with(instrument["token"])
 
 
 def test_legacy_segment_balances_migrate_without_multiplying_capital(tmp_path):
