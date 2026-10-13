@@ -231,6 +231,12 @@ for p in positions:
         p["unrealized_pnl"] = None
         missing_quote_count += 1
 
+# The dashboard can be opened before the engine performs the one-time legacy
+# migration. Compute the same read-only fallback without summing old segment balances.
+if "available_margin_total" not in state_dict:
+    realized_ledger_pnl = sum(float(t.get("net_pnl") or 0.0) for t in all_trades_processed)
+    shared_available_margin = initial_cap + realized_ledger_pnl - global_blocked_margin
+
 portfolio_equity = shared_available_margin + global_blocked_margin + global_unrealized_pnl
 
 st.title("📊 KB4Trade Portfolio Monitor")
