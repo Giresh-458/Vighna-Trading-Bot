@@ -25,11 +25,6 @@ class PaperEngine:
         self.pos_manager = pos_manager
         self.ws = ws
         self.is_running = False
-        self.eod_processed = False
-        self.nfo_eod_processed = False
-        self.bfo_eod_processed = False
-        self.hz_eod_processed = False
-        self._last_eod_date = None
         self._last_eod_attempt_monotonic = 0.0
         self._last_manual_exit_attempts: Dict[int, float] = {}
 
@@ -248,25 +243,9 @@ class PaperEngine:
             if token:
                 self.ws.unsubscribe(token)
                 
-        # If we reached here and MCX is also closed (or we only had NFO), 
-        # eod_processed should be True, but since MCX closes later, we might need to 
-        # set eod_processed = True only if ALL are processed.
-        # Actually, it's safer to just run this check once at 15:15 and once at 23:30.
-        # We will let it run on every cycle after 15:15, it will just skip MCX.
-        if is_mcx_eod:
-            self.eod_processed = True
-
     def run_cycle(self):
-        # We process eod square-off
+        # Process EOD square-off once due, then retry deferred positions on a throttle.
         now_ist = datetime.now(IST)
-        today = now_ist.date()
-        if self._last_eod_date != today:
-            self.eod_processed = False
-            self.nfo_eod_processed = False
-            self.bfo_eod_processed = False
-            self.hz_eod_processed = False
-            self._last_eod_date = today
-
         current_minutes = now_ist.hour * 60 + now_ist.minute
 
         # Determine if NFO/NSE EOD is reached
@@ -323,8 +302,8 @@ class PaperEngine:
 
                 # Avoid hammering the broker API while retrying a manual close with no price.
                 now_monotonic = time.monotonic()
-                last_attempt = self._last_manual_exit_attempts.get(cmd_id, 0.0)
-                if now_monotonic - last_attempt < 2.0:
+                last_attempt = self._last_manual_exit_attempts.get(cmd_id)
+                if last_attempt is not None and now_monotonic - last_attempt < 2.0:
                     continue
                 self._last_manual_exit_attempts[cmd_id] = now_monotonic
 
