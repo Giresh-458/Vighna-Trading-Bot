@@ -329,6 +329,24 @@ def test_manual_close_recovers_open_position_missing_from_memory(tmp_path):
     assert db.fetch_one("SELECT status FROM commands WHERE id = ?", (command_id,))["status"] == "PENDING"
 
 
+def test_database_preserves_original_market_tick_timestamp(tmp_path):
+    from datetime import timezone
+    from app.market_data_cache import is_fresh_persisted_tick
+
+    db = Database(str(tmp_path / "tick-time.sqlite3"))
+    received_at = datetime.now(timezone.utc) - timedelta(seconds=5)
+    db.update_live_tick("token-1", "NIFTY", 12.5, updated_at=received_at.isoformat())
+
+    persisted = db.fetch_one(
+        "SELECT ltp, updated_at FROM live_ticks WHERE token = ?", ("token-1",)
+    )
+    assert persisted["ltp"] == pytest.approx(12.5)
+    assert persisted["updated_at"] == received_at.isoformat()
+    assert not is_fresh_persisted_tick(
+        persisted["updated_at"], max_age_ms=2000, now=datetime.now(timezone.utc)
+    )
+
+
 def test_persisted_tick_freshness_rejects_missing_and_stale_timestamps():
     from datetime import timezone
 
