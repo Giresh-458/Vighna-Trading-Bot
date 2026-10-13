@@ -27,6 +27,7 @@ from app.config import (
     TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_SESSION_NAME, TELEGRAM_CHANNEL_ID,
     COMMODITY_CHANNEL_ID, TELEGRAM_BOT_TOKEN,
     ANGEL_API_KEY, ANGEL_CLIENT_ID, ANGEL_PASSWORD, ANGEL_TOTP_SECRET,
+    MAX_TICK_AGE_MS,
     validate_config
 )
 from app.angel_auth import AngelAuth
@@ -182,7 +183,10 @@ async def run_system():
             if event.message.is_reply:
                 reply_to_msg_id = event.message.reply_to_msg_id
                 # Fetch ALL signals from this message (could be paired dual-direction)
-                signal_rows = db.fetch_all("SELECT id, segment FROM signals WHERE telegram_message_id = ?", (reply_to_msg_id,))
+                signal_rows = db.fetch_all(
+                    "SELECT id, segment FROM signals WHERE telegram_message_id = ? AND channel_id = ?",
+                    (reply_to_msg_id, chat_id),
+                )
                 if signal_rows:
                     action_dict = await asyncio.to_thread(LocalLLMParser.parse_reply, msg_text)
                     logger.info(f"Parsed action from reply: {action_dict}")
@@ -215,15 +219,29 @@ async def run_system():
                                 except Exception as e:
                                     logger.warning(f"Could not fetch live REST CMP for {symbol}: {e}")
 
-                                raw = md_cache.get_raw_tick(token)
-                                exit_price = live_cmp or (raw["ltp"] if raw else None) or pos_row.get("entry_price", 0.0)
-                                
-                                if exit_price > 0:
+                                cached_cmp = md_cache.get_ltp(token, max_age_ms=MAX_TICK_AGE_MS)
+                                exit_price = live_cmp if live_cmp is not None and live_cmp > 0 else cached_cmp
+
+                                if exit_price is not None and exit_price > 0:
                                     logger.info(f"Executing manual EXIT for {symbol} at {exit_price} based on Telegram reply.")
                                     pos_manager.execute_exit(pos_id, exit_price, "MANUAL_EXIT")
                                     ws.unsubscribe(token)
                                 else:
-                                    logger.warning(f"Could not exit {symbol} - no price available.")
+                                    # Preserve the user's exit request and let the engine retry
+                                    # when a fresh quote is available; never substitute entry price.
+                                    import json
+                                    db.execute(
+                                        "INSERT INTO commands (command, payload, status, created_at) VALUES (?, ?, 'PENDING', ?)",
+                                        (
+                                            "CLOSE_POSITION",
+                                            json.dumps({"pos_id": pos_id}),
+                                            datetime.now(timezone.utc).isoformat(),
+                                        ),
+                                    )
+                                    logger.warning(
+                                        "Manual EXIT for %s queued for retry: no fresh REST/WebSocket price is available.",
+                                        symbol,
+                                    )
                             else:
                                 # It's pending entry, so we cancel
                                 pos_manager.mark_signal_expired(signal_id, "MANUAL_CANCEL")
@@ -293,7 +311,22 @@ async def run_system():
             # Pre-call Target Check: Did price already touch or cross Target 1 in the last 3 minutes?
             exchange = inst.get("exch_seg", "NFO")
             await asyncio.to_thread(auth.refresh_if_needed)
-            if await asyncio.to_thread(check_recent_target_reached, auth.api, exchange, inst["token"], signal.target_1, 3, signal.trade_type.value):
+            target_check = await asyncio.to_thread(
+                check_recent_target_reached,
+                auth.api,
+                exchange,
+                inst["token"],
+                signal.target_1,
+                3,
+                signal.trade_type.value,
+            )
+            if target_check is None:
+                logger.error(
+                    "Cannot validate recent target history for %s; skipping signal instead of assuming it is safe.",
+                    inst["symbol"],
+                )
+                continue
+            if target_check:
                 logger.warning(f"Target 1 ({signal.target_1}) was already reached in the last 3 minutes for {inst['symbol']}. Ignoring trade.")
                 continue
 

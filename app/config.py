@@ -38,6 +38,13 @@ TIMEZONE = os.getenv("TIMEZONE", "Asia/Kolkata")
 PAPER_ONLY = os.getenv("PAPER_ONLY", "true").strip().lower() == "true"
 APP_ENV = os.getenv("APP_ENV", "paper").strip().lower()
 
+# Execution safeguards. Entry wait values are in seconds; tick age is in milliseconds.
+ENTRY_WAIT_SECONDS = int(os.getenv("ENTRY_WAIT_SECONDS", "300"))
+COMMODITY_FUTURES_ENTRY_WAIT_SECONDS = int(
+    os.getenv("COMMODITY_FUTURES_ENTRY_WAIT_SECONDS", "14400")
+)
+MAX_TICK_AGE_MS = int(os.getenv("MAX_TICK_AGE_MS", "2000"))
+
 def validate_config():
     missing = []
     if not TELEGRAM_API_ID: missing.append("TELEGRAM_API_ID")
@@ -50,3 +57,18 @@ def validate_config():
     if not ANGEL_TOTP_SECRET: missing.append("ANGEL_TOTP_SECRET")
     if missing:
         raise ValueError(f"Missing mandatory environment variables in .env: {', '.join(missing)}")
+
+    if ENTRY_WAIT_SECONDS <= 0:
+        raise ValueError("ENTRY_WAIT_SECONDS must be greater than zero")
+    if COMMODITY_FUTURES_ENTRY_WAIT_SECONDS <= 0:
+        raise ValueError("COMMODITY_FUTURES_ENTRY_WAIT_SECONDS must be greater than zero")
+    if MAX_TICK_AGE_MS <= 0:
+        raise ValueError("MAX_TICK_AGE_MS must be greater than zero")
+
+    # Live order placement currently does not reconcile broker fills with local positions.
+    # Refuse live startup rather than allow the local ledger to claim fills that never occurred.
+    if APP_ENV == "real" and not PAPER_ONLY:
+        raise ValueError(
+            "Live trading is blocked until broker fill/status reconciliation is implemented. "
+            "Use APP_ENV=paper and PAPER_ONLY=true for safe validation."
+        )

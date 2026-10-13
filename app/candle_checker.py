@@ -17,13 +17,13 @@ def check_recent_target_reached(
     target_1: float, 
     lookback_minutes: int = 3,
     trade_type: str = "LONG"
-) -> bool:
+) -> Optional[bool]:
     """
     Checks if Target 1 was already reached within the last `lookback_minutes`.
     """
     global _last_candle_call
     if not smart_api:
-        return False
+        return None
         
     try:
         now = datetime.now()
@@ -47,7 +47,7 @@ def check_recent_target_reached(
             _last_candle_call = time.time()
             res = smart_api.getCandleData(params)
             
-        if res and res.get("status") and res.get("data"):
+        if res and res.get("status") and isinstance(res.get("data"), list) and res["data"]:
             # Angel One candle format: [timestamp, open, high, low, close, volume]
             for candle in res["data"]:
                 candle_time = candle[0]
@@ -66,7 +66,14 @@ def check_recent_target_reached(
                         f"(Low: {candle_low}) within the last {lookback_minutes} minutes."
                     )
                     return True
+        else:
+            logger.warning(
+                "Recent candle history unavailable for token %s; result is unknown.",
+                token,
+            )
+            return None
     except Exception as e:
         logger.warning(f"Could not verify recent candle data for token {token}: {e}")
-        
+        return None
+
     return False

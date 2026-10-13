@@ -6,25 +6,27 @@ from app.market_data_cache import MarketDataCache
 from app.position_manager import PositionManager
 from app.models import SignalStatus
 from app.angelone_marketdata import AngelOneWebSocket
-from app.config import EOD_CLOSE_TIME
+from app.config import (
+    EOD_CLOSE_TIME,
+    ENTRY_WAIT_SECONDS,
+    COMMODITY_FUTURES_ENTRY_WAIT_SECONDS,
+    MAX_TICK_AGE_MS,
+)
 
 logger = logging.getLogger(__name__)
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
 class PaperEngine:
-    ENTRY_WAIT_SECONDS = 300  # 5 minutes max wait for entry
+    EOD_RETRY_INTERVAL_SECONDS = 5.0
 
     def __init__(self, md_cache: MarketDataCache, pos_manager: PositionManager, ws: AngelOneWebSocket):
         self.md_cache = md_cache
         self.pos_manager = pos_manager
         self.ws = ws
         self.is_running = False
-        self.eod_processed = False
-        self.nfo_eod_processed = False
-        self.bfo_eod_processed = False
-        self.hz_eod_processed = False
-        self._last_eod_date = None
+        self._last_eod_attempt_monotonic = 0.0
+        self._last_manual_exit_attempts: Dict[int, float] = {}
 
     def check_signals(self):
         """Checks waiting signals for entry or expiry."""
@@ -44,16 +46,39 @@ class PaperEngine:
             
             # Check expiry (dynamic window)
             segment = sig.get("segment", "equity")
-            max_wait = 14400 if segment == "commodity_futures" else self.ENTRY_WAIT_SECONDS
-            
+            max_wait = (
+                COMMODITY_FUTURES_ENTRY_WAIT_SECONDS
+                if segment == "commodity_futures"
+                else ENTRY_WAIT_SECONDS
+            )
+
+            # Do not enter a new position after that instrument's session cutoff.
+            now_ist = datetime.now(IST)
+            current_minutes = now_ist.hour * 60 + now_ist.minute
+            exch_seg = inst.get("exch_seg", "NFO")
+            if exch_seg == "MCX":
+                entry_cutoff = 23 * 60
+            elif segment == "hero_zero":
+                entry_cutoff = 15 * 60 + 40
+            elif exch_seg == "BFO":
+                entry_cutoff = 15 * 60 + 30
+            else:
+                try:
+                    cutoff_hour, cutoff_minute = map(int, EOD_CLOSE_TIME.split(":"))
+                    entry_cutoff = cutoff_hour * 60 + cutoff_minute
+                except Exception:
+                    entry_cutoff = 15 * 60 + 15
+            if current_minutes >= entry_cutoff:
+                continue
+
             received_ts = sig.get("_received_ts", now)
             if now - received_ts > max_wait:
                 self.pos_manager.mark_signal_expired(sig_id, SignalStatus.EXPIRED.value)
                 self.ws.unsubscribe(token)
                 continue
                 
-            # Use longer staleness window — illiquid options may tick infrequently
-            ltp = self.md_cache.get_ltp(token, max_age_ms=30000)
+            # Entry decisions must use data inside the configured freshness window.
+            ltp = self.md_cache.get_ltp(token, max_age_ms=MAX_TICK_AGE_MS)
             if not ltp:
                 continue
                 
@@ -74,7 +99,7 @@ class PaperEngine:
                 self.pos_manager.execute_entry(sig_id, ltp)
 
     def check_positions(self):
-        """Checks open positions for Target or SL. Never stops until one is hit."""
+        """Checks open positions for Target or SL using only fresh market data."""
         with self.pos_manager._state_lock:
             pos_ids = list(self.pos_manager.active_positions.keys())
         for pos_id in pos_ids:
@@ -82,13 +107,10 @@ class PaperEngine:
             if not pos: continue
             
             token = pos["token"]
-            # Always use the last known price — never skip a position.
-            # An illiquid option's last trade at 5.0 is still 5.0
-            # even if that tick was minutes ago.
-            raw = self.md_cache.get_raw_tick(token)
-            if not raw:
+            # Stale prices must not trigger simulated exits or be written as live ticks.
+            ltp = self.md_cache.get_ltp(token, max_age_ms=MAX_TICK_AGE_MS)
+            if ltp is None:
                 continue
-            ltp = raw["ltp"]
             try:
                 self.pos_manager.db.update_live_tick(token, pos["symbol"], ltp)
             except Exception:
@@ -154,7 +176,7 @@ class PaperEngine:
                 exch_seg = self.pos_manager.inst_manager.token_to_instrument[token].get("exch_seg", "NFO")
                 
             if exch_seg == "MCX" and not is_mcx_eod:
-                continue  # Skip MCX until 23:30
+                continue  # Skip MCX until 23:00
             if exch_seg == "BFO" and not is_bfo_eod:
                 continue  # Skip BFO until 15:30
             
@@ -164,9 +186,35 @@ class PaperEngine:
             if segment == "hero_zero" and not is_hz_eod:
                 continue  # Skip Hero-Zero until 15:40
             
-            raw = self.md_cache.get_raw_tick(token)
-            ltp = raw["ltp"] if raw else pos["entry_price"]
-            
+            # Prefer a fresh WebSocket tick; otherwise ask Angel One for the current LTP.
+            ltp = self.md_cache.get_ltp(token, max_age_ms=MAX_TICK_AGE_MS)
+            if ltp is None:
+                api = getattr(getattr(self.ws, "auth", None), "api", None)
+                if api:
+                    try:
+                        response = api.ltpData(exch_seg, pos["symbol"], str(token))
+                        if (
+                            isinstance(response, dict)
+                            and response.get("status")
+                            and isinstance(response.get("data"), dict)
+                        ):
+                            candidate = response["data"].get("ltp")
+                            if candidate is not None:
+                                candidate = float(candidate)
+                                if candidate > 0:
+                                    ltp = candidate
+                    except Exception as exc:
+                        logger.warning("EOD live LTP lookup failed for %s: %s", pos["symbol"], exc)
+
+            if ltp is None or ltp <= 0:
+                # Never fabricate a close price from entry price; keep the position visible/open
+                # and retry EOD processing after a short delay.
+                logger.error(
+                    "EOD square-off deferred for %s: no fresh/REST price is available.",
+                    pos["symbol"],
+                )
+                continue
+
             logger.info(f"EOD Square-Off: Closing {pos['symbol']} at {ltp} (Reason: EOD_CLOSED)")
             self.pos_manager.execute_exit(pos_id, ltp, SignalStatus.EOD_CLOSED.value)
             self.ws.unsubscribe(token)
@@ -195,27 +243,11 @@ class PaperEngine:
             if token:
                 self.ws.unsubscribe(token)
                 
-        # If we reached here and MCX is also closed (or we only had NFO), 
-        # eod_processed should be True, but since MCX closes later, we might need to 
-        # set eod_processed = True only if ALL are processed.
-        # Actually, it's safer to just run this check once at 15:15 and once at 23:30.
-        # We will let it run on every cycle after 15:15, it will just skip MCX.
-        if is_mcx_eod:
-            self.eod_processed = True
-
     def run_cycle(self):
-        # We process eod square-off
+        # Process EOD square-off once due, then retry deferred positions on a throttle.
         now_ist = datetime.now(IST)
-        today = now_ist.date()
-        if self._last_eod_date != today:
-            self.eod_processed = False
-            self.nfo_eod_processed = False
-            self.bfo_eod_processed = False
-            self.hz_eod_processed = False
-            self._last_eod_date = today
-
         current_minutes = now_ist.hour * 60 + now_ist.minute
-        
+
         # Determine if NFO/NSE EOD is reached
         try:
             eod_hour, eod_minute = map(int, EOD_CLOSE_TIME.split(":"))
@@ -232,22 +264,20 @@ class PaperEngine:
         # MCX EOD is 23:00
         mcx_eod = current_minutes >= (23 * 60 + 0)
         
+        any_eod = nfo_eod or bfo_eod or hz_eod or mcx_eod
+        now_monotonic = time.monotonic()
+        if any_eod and (
+            now_monotonic - self._last_eod_attempt_monotonic
+            >= self.EOD_RETRY_INTERVAL_SECONDS
+        ):
+            # Retry deferred EOD closes rather than silently leaving a made-up fill price.
+            self.check_eod_squareoff()
+            self._last_eod_attempt_monotonic = now_monotonic
+
         if mcx_eod:
-            if not self.eod_processed:
-                self.check_eod_squareoff()
-                self.eod_processed = True
-            return  # Everything is closed
-            
-        if hz_eod and not self.hz_eod_processed:
-            self.check_eod_squareoff()
-            self.hz_eod_processed = True
-        elif bfo_eod and not self.bfo_eod_processed:
-            self.check_eod_squareoff()
-            self.bfo_eod_processed = True
-        elif nfo_eod and not self.nfo_eod_processed:
-            self.check_eod_squareoff()
-            self.nfo_eod_processed = True
-                
+            self.process_commands()
+            return  # No supported segment should open new positions after the final cutoff.
+
         self.process_commands()
         self.check_signals()
         self.check_positions()
@@ -262,15 +292,20 @@ class PaperEngine:
             
             if command == "CLOSE_POSITION":
                 pos_id = payload
-                reported_cmp = None
                 try:
                     import json
                     if payload and payload.strip().startswith("{"):
                         p_data = json.loads(payload)
                         pos_id = p_data.get("pos_id", payload)
-                        reported_cmp = p_data.get("cmp")
                 except Exception:
                     pos_id = payload
+
+                # Avoid hammering the broker API while retrying a manual close with no price.
+                now_monotonic = time.monotonic()
+                last_attempt = self._last_manual_exit_attempts.get(cmd_id)
+                if last_attempt is not None and now_monotonic - last_attempt < 2.0:
+                    continue
+                self._last_manual_exit_attempts[cmd_id] = now_monotonic
 
                 pos = self.pos_manager.active_positions.get(pos_id)
                 if pos:
@@ -289,19 +324,40 @@ class PaperEngine:
                             elif any(comm in symbol for comm in ["CRUDE", "NATURAL", "GOLD", "SILVER", "COPPER", "ZINC", "ALUM"]):
                                 exch_seg = "MCX"
                             res = self.ws.auth.api.ltpData(exch_seg, symbol, str(token))
-                            if res and res.get("status") and res.get("data"):
-                                live_cmp = float(res["data"]["ltp"])
+                            if (
+                                isinstance(res, dict)
+                                and res.get("status")
+                                and isinstance(res.get("data"), dict)
+                            ):
+                                candidate = res["data"].get("ltp")
+                                if candidate is not None:
+                                    candidate = float(candidate)
+                                    if candidate > 0:
+                                        live_cmp = candidate
                     except Exception as e:
                         logger.warning(f"Could not fetch live REST CMP for {symbol}: {e}")
 
-                    # 2. Priority: Live REST CMP -> Reported UI CMP -> Cache -> Entry Price
-                    raw = self.md_cache.get_raw_tick(token)
-                    cache_ltp = raw["ltp"] if raw else None
-                    
-                    exit_price = live_cmp or reported_cmp or cache_ltp or pos["entry_price"]
-                    logger.info(f"Manual Close Triggered for {pos_id} at {exit_price} (live_cmp={live_cmp}, reported_cmp={reported_cmp}, cache_ltp={cache_ltp})")
+                    # Use only a successful REST quote or a fresh WebSocket tick.
+                    cache_ltp = self.md_cache.get_ltp(token, max_age_ms=MAX_TICK_AGE_MS)
+                    exit_price = live_cmp if live_cmp is not None else cache_ltp
+                    if exit_price is None or exit_price <= 0:
+                        logger.error(
+                            "Manual close for %s deferred: no fresh REST/WebSocket quote is available.",
+                            symbol,
+                        )
+                        # Keep the command PENDING; the throttled loop retries it.
+                        continue
+
+                    logger.info(
+                        "Manual Close Triggered for %s at %s (REST=%s, fresh_tick=%s)",
+                        pos_id,
+                        exit_price,
+                        live_cmp,
+                        cache_ltp,
+                    )
                     self.pos_manager.execute_exit(pos_id, exit_price, "MANUAL_EXIT")
                     self.ws.unsubscribe(token)
+                    self._last_manual_exit_attempts.pop(cmd_id, None)
                 
             self.pos_manager.db.execute("UPDATE commands SET status = 'DONE' WHERE id = ?", (cmd_id,))
             
