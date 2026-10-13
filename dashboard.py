@@ -255,14 +255,14 @@ for i, seg in enumerate(segments):
                     conn = get_db_connection()
                     try:
                         cur = conn.cursor()
-                        payload_data = json.dumps({
-                            "pos_id": p["id"],
-                            "cmp": float(p.get("current_ltp", p["entry_price"]))
-                        })
+                        payload_data = json.dumps({"pos_id": p["id"]})
                         cur.execute("INSERT INTO commands (command, payload, status, created_at) VALUES (?, ?, 'PENDING', ?)", 
                                     ("CLOSE_POSITION", payload_data, datetime.now(timezone.utc).isoformat()))
                         conn.commit()
-                        st.success(f"Close signal sent for {p['symbol']} at CMP ₹{p['current_ltp']:.2f}! Squaring off...")
+                        st.info(
+                            f"Manual close request queued for {p['symbol']}. "
+                            "The bot will close it only after a fresh REST/WebSocket quote is available."
+                        )
                         time.sleep(1)
                         st.rerun()
                     finally:
