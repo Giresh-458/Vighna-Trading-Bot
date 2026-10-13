@@ -182,7 +182,10 @@ async def run_system():
             if event.message.is_reply:
                 reply_to_msg_id = event.message.reply_to_msg_id
                 # Fetch ALL signals from this message (could be paired dual-direction)
-                signal_rows = db.fetch_all("SELECT id, segment FROM signals WHERE telegram_message_id = ?", (reply_to_msg_id,))
+                signal_rows = db.fetch_all(
+                    "SELECT id, segment FROM signals WHERE telegram_message_id = ? AND channel_id = ?",
+                    (reply_to_msg_id, chat_id),
+                )
                 if signal_rows:
                     action_dict = await asyncio.to_thread(LocalLLMParser.parse_reply, msg_text)
                     logger.info(f"Parsed action from reply: {action_dict}")
@@ -293,7 +296,22 @@ async def run_system():
             # Pre-call Target Check: Did price already touch or cross Target 1 in the last 3 minutes?
             exchange = inst.get("exch_seg", "NFO")
             await asyncio.to_thread(auth.refresh_if_needed)
-            if await asyncio.to_thread(check_recent_target_reached, auth.api, exchange, inst["token"], signal.target_1, 3, signal.trade_type.value):
+            target_check = await asyncio.to_thread(
+                check_recent_target_reached,
+                auth.api,
+                exchange,
+                inst["token"],
+                signal.target_1,
+                3,
+                signal.trade_type.value,
+            )
+            if target_check is None:
+                logger.error(
+                    "Cannot validate recent target history for %s; skipping signal instead of assuming it is safe.",
+                    inst["symbol"],
+                )
+                continue
+            if target_check:
                 logger.warning(f"Target 1 ({signal.target_1}) was already reached in the last 3 minutes for {inst['symbol']}. Ignoring trade.")
                 continue
 
