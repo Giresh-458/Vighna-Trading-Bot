@@ -17,7 +17,7 @@ def check_recent_target_reached(
     target_1: float, 
     lookback_minutes: int = 3,
     trade_type: str = "LONG"
-) -> bool:
+) -> Optional[bool]:
     """
     Checks if Target 1 was already reached within the last `lookback_minutes`.
     """
@@ -66,12 +66,12 @@ def check_recent_target_reached(
                         f"(Low: {candle_low}) within the last {lookback_minutes} minutes."
                     )
                     return True
-            else:
-                logger.warning(
-                    "Recent candle history unavailable for token %s; result is unknown.",
-                    token,
-                )
-                return None
+        else:
+            logger.warning(
+                "Recent candle history unavailable for token %s; result is unknown.",
+                token,
+            )
+            return None
     except Exception as e:
         logger.warning(f"Could not verify recent candle data for token {token}: {e}")
         return None
