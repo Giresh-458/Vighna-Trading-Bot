@@ -203,6 +203,25 @@ class PositionManager:
                      (f" (paired with {paired_signal_id})" if paired_signal_id else ""))
         return signal_id
 
+    def cancel_pending_signal(self, signal_id: str, reason: str = "MANUAL_CANCEL") -> bool:
+        """Cancel only a still-pending signal, with a DB status guard against entry races."""
+        try:
+            with self.db.transaction() as conn:
+                cursor = conn.execute(
+                    "UPDATE signals SET status = ? WHERE id = ? AND status = ?",
+                    (reason, signal_id, SignalStatus.WATCHING_ENTRY.value),
+                )
+                cancelled = cursor.rowcount == 1
+        except Exception:
+            logger.exception("Could not cancel pending signal %s", signal_id)
+            return False
+
+        if cancelled:
+            with self._state_lock:
+                self.active_signals.pop(signal_id, None)
+            logger.info("Pending signal %s marked as %s", signal_id, reason)
+        return cancelled
+
     def mark_signal_expired(self, signal_id: str, reason: str):
         with self._state_lock:
             if signal_id in self.active_signals:
