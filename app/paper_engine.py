@@ -29,9 +29,10 @@ class PaperEngine:
         self._last_manual_exit_attempts: Dict[int, float] = {}
         # Shared limiter keeps quote-recovery REST calls below typical broker rate limits.
         self._last_position_rest_attempt_monotonic = None
+        self._last_position_rest_position_id = None
         self.POSITION_REST_RETRY_SECONDS = 0.5
 
-    def _fetch_position_rest_ltp(self, pos: dict):
+    def _fetch_position_rest_ltp(self, pos: dict, pos_id=None):
         """Fetch an emergency quote for exit monitoring; never writes it as a WS tick."""
         now = time.monotonic()
         last_attempt = self._last_position_rest_attempt_monotonic
@@ -62,6 +63,7 @@ class PaperEngine:
                 exch_seg = "NFO"
 
         self._last_position_rest_attempt_monotonic = now
+        self._last_position_rest_position_id = pos_id
         try:
             response = api.ltpData(exch_seg, symbol, token)
             if isinstance(response, dict) and response.get("status") and isinstance(response.get("data"), dict):
@@ -152,6 +154,14 @@ class PaperEngine:
         """Check target/SL with fresh WebSocket data, falling back to throttled REST quotes."""
         with self.pos_manager._state_lock:
             pos_ids = list(self.pos_manager.active_positions.keys())
+
+        # Rotate the first candidate after the last REST attempt. Otherwise, with several
+        # stale positions, the first one could consume every global rate-limit slot.
+        last_pos_id = self._last_position_rest_position_id
+        if last_pos_id in pos_ids:
+            last_index = pos_ids.index(last_pos_id)
+            pos_ids = pos_ids[last_index + 1:] + pos_ids[:last_index + 1]
+
         for pos_id in pos_ids:
             pos = self.pos_manager.active_positions.get(pos_id)
             if not pos:
@@ -161,9 +171,9 @@ class PaperEngine:
             ltp = self.md_cache.get_ltp(token, max_age_ms=MAX_TICK_AGE_MS)
             price_source = "WEBSOCKET"
             if ltp is None or ltp <= 0:
-                # Unlike entry checks, an open position must keep attempting a safe exit quote
-                # when the stream is stale. REST requests are globally throttled.
-                ltp = self._fetch_position_rest_ltp(pos)
+                # Unlike entry checks, an open position must keep attempting a safe exit quote.
+                # One REST call at a time is shared across all position checks.
+                ltp = self._fetch_position_rest_ltp(pos, pos_id=pos_id)
                 price_source = "REST"
             if ltp is None or ltp <= 0:
                 continue
@@ -238,25 +248,10 @@ class PaperEngine:
             if segment == "hero_zero" and not is_hz_eod:
                 continue  # Skip Hero-Zero until 15:40
             
-            # Prefer a fresh WebSocket tick; otherwise ask Angel One for the current LTP.
+            # Prefer a fresh WebSocket tick; otherwise use the shared, throttled REST fallback.
             ltp = self.md_cache.get_ltp(token, max_age_ms=MAX_TICK_AGE_MS)
-            if ltp is None:
-                api = getattr(getattr(self.ws, "auth", None), "api", None)
-                if api:
-                    try:
-                        response = api.ltpData(exch_seg, pos["symbol"], str(token))
-                        if (
-                            isinstance(response, dict)
-                            and response.get("status")
-                            and isinstance(response.get("data"), dict)
-                        ):
-                            candidate = response["data"].get("ltp")
-                            if candidate is not None:
-                                candidate = float(candidate)
-                                if candidate > 0:
-                                    ltp = candidate
-                    except Exception as exc:
-                        logger.warning("EOD live LTP lookup failed for %s: %s", pos["symbol"], exc)
+            if ltp is None or ltp <= 0:
+                ltp = self._fetch_position_rest_ltp(pos, pos_id=pos_id)
 
             if ltp is None or ltp <= 0:
                 # Never fabricate a close price from entry price; keep the position visible/open
