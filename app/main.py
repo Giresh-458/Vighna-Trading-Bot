@@ -227,8 +227,19 @@ async def run_system():
                                     pos_manager.execute_exit(pos_id, exit_price, "MANUAL_EXIT")
                                     ws.unsubscribe(token)
                                 else:
-                                    logger.error(
-                                        "Manual EXIT for %s was not executed: no fresh REST/WebSocket price is available.",
+                                    # Preserve the user's exit request and let the engine retry
+                                    # when a fresh quote is available; never substitute entry price.
+                                    import json
+                                    db.execute(
+                                        "INSERT INTO commands (command, payload, status, created_at) VALUES (?, ?, 'PENDING', ?)",
+                                        (
+                                            "CLOSE_POSITION",
+                                            json.dumps({"pos_id": pos_id}),
+                                            datetime.now(timezone.utc).isoformat(),
+                                        ),
+                                    )
+                                    logger.warning(
+                                        "Manual EXIT for %s queued for retry: no fresh REST/WebSocket price is available.",
                                         symbol,
                                     )
                             else:
