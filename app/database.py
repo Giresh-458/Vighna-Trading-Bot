@@ -1,6 +1,7 @@
 import sqlite3
 import logging
-from typing import Dict, Any, List
+from contextlib import contextmanager
+from typing import Dict, Any, List, Iterator, Tuple
 from threading import Lock
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,9 @@ class Database:
                     status TEXT,
                     exit_price REAL,
                     exit_time TEXT,
-                    exit_reason TEXT
+                    exit_reason TEXT,
+                    trade_type TEXT DEFAULT 'LONG',
+                    margin_used REAL
                 )
                 """)
                 # Trades table for P&L tracking
@@ -123,6 +126,13 @@ class Database:
                     cursor.execute("ALTER TABLE positions ADD COLUMN trade_type TEXT DEFAULT 'LONG'")
                 except sqlite3.OperationalError:
                     pass
+
+                # Persist the exact margin reserved at entry so exit accounting can
+                # release the same amount even if the instrument master later changes.
+                try:
+                    cursor.execute("ALTER TABLE positions ADD COLUMN margin_used REAL")
+                except sqlite3.OperationalError:
+                    pass
                 
                 try:
                     cursor.execute("ALTER TABLE subscribers ADD COLUMN allowed_segments TEXT DEFAULT 'equity,commodity_futures,commodity_options,hero_zero'")
@@ -140,6 +150,27 @@ class Database:
                     pass
                 
                 conn.commit()
+
+    @contextmanager
+    def transaction(self) -> Iterator[sqlite3.Connection]:
+        """Run a group of SQL statements atomically on one SQLite connection.
+
+        BEGIN IMMEDIATE serializes ledger writers before they read or update capital.
+        Callers must use the yielded connection for every statement in this transaction;
+        calling Database.execute() from inside this context would open a second transaction.
+        """
+        with self._lock:
+            conn = self._get_conn()
+            conn.row_factory = sqlite3.Row
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                yield conn
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
 
     def execute(self, query: str, params: tuple = ()) -> int:
         with self._lock:
@@ -166,12 +197,15 @@ class Database:
                 row = cursor.fetchone()
                 return dict(row) if row else None
 
-    def update_live_tick(self, token: str, symbol: str, ltp: float):
-        import time
+    def update_live_tick(self, token: str, symbol: str, ltp: float, updated_at: str = None):
         from datetime import datetime, timezone
-        now_str = datetime.now(timezone.utc).isoformat()
-        self.execute("INSERT OR REPLACE INTO live_ticks (token, symbol, ltp, updated_at) VALUES (?, ?, ?, ?)",
-                     (str(token), symbol, float(ltp), now_str))
+        # Callers persisting WebSocket data should pass the original receipt timestamp,
+        # not the database-write time, or repeated polling would make an old tick look fresh.
+        timestamp = updated_at or datetime.now(timezone.utc).isoformat()
+        self.execute(
+            "INSERT OR REPLACE INTO live_ticks (token, symbol, ltp, updated_at) VALUES (?, ?, ?, ?)",
+            (str(token), symbol, float(ltp), timestamp),
+        )
 
     def get_all_live_ticks(self) -> Dict[str, float]:
         rows = self.fetch_all("SELECT token, ltp FROM live_ticks")

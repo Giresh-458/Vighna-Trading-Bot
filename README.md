@@ -21,7 +21,8 @@ A robust, low-latency automated trading engine that listens to Telegram alert ch
   - Low-latency WebSocket streaming with automated heartbeat, reconnection watchdog, and dynamic resubscription.
   - Target-reached pre-call validation via historical candle lookback to prevent entering stale signals that already hit their target.
 - **Paper Trading Engine & Realistic Accounting**:
-  - Simulates fill execution, multi-segment capital allocation (Equity, Commodity Futures, Commodity Options, Hero-Zero), and realistic margin requirements (10% futures margin, 100% options premium).
+  - Simulates fills across Equity, Commodity Futures, Commodity Options, and Hero-Zero using one shared `INITIAL_CAPITAL` pool; the configured budget is not multiplied by segment.
+  - Stores the exact entry margin per position and commits position, trade, and shared-cash updates atomically. Legacy per-segment balances are migrated from starting capital + recorded net P&L − margin reserved by open positions, rather than summed.
   - Accurate Indian brokerage, STT/CTT, exchange transaction charges, stamp duty, SEBI turnover fees, and GST calculation.
   - Automated End-of-Day (EOD) square-off at 15:15 IST (Equity/NSE/BSE) and 23:00 IST (MCX commodities).
 - **Broker Order Integration (`RealOrderManager`)**:
@@ -246,4 +247,4 @@ powershell -ExecutionPolicy Bypass -File setup_scheduler.ps1
 
 - Never commit `.env` or files matching `*.session`, `angel_session.json`, or `*.db`.
 - All session keys, live SQLite databases, and large cache dumps (`scrip_master.json`) are pre-configured in `.gitignore`.
-- Keep `APP_ENV=paper` and `PAPER_ONLY=true` for current validation. The main application rejects live-mode configuration until broker order-fill/status reconciliation is implemented and tested.
+- Keep `APP_ENV=paper` and `PAPER_ONLY=true` for current validation. The main application rejects live-mode configuration until broker order-fill/status reconciliation is implemented and tested. When moving an existing database to this version, back up `paper_trading.db` first; the first portfolio initialization reconstructs the shared balance from the trade ledger and open positions. Do not manually add old `available_margin_<segment>` keys together.

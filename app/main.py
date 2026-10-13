@@ -44,6 +44,7 @@ from app.commodity_signal_parser import CommoditySignalParser
 from app.local_llm_parser import LocalLLMParser
 from app.candle_checker import check_recent_target_reached
 from app.real_order_manager import RealOrderManager
+from app.reply_action_validator import validate_reply_price_update
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -184,7 +185,8 @@ async def run_system():
                 reply_to_msg_id = event.message.reply_to_msg_id
                 # Fetch ALL signals from this message (could be paired dual-direction)
                 signal_rows = db.fetch_all(
-                    "SELECT id, segment FROM signals WHERE telegram_message_id = ? AND channel_id = ?",
+                    """SELECT id, segment, status, trade_type, entry_low, entry_high, target_1, stop_loss
+                       FROM signals WHERE telegram_message_id = ? AND channel_id = ?""",
                     (reply_to_msg_id, chat_id),
                 )
                 if signal_rows:
@@ -224,8 +226,24 @@ async def run_system():
 
                                 if exit_price is not None and exit_price > 0:
                                     logger.info(f"Executing manual EXIT for {symbol} at {exit_price} based on Telegram reply.")
-                                    pos_manager.execute_exit(pos_id, exit_price, "MANUAL_EXIT")
-                                    ws.unsubscribe(token)
+                                    if pos_manager.execute_exit(pos_id, exit_price, "MANUAL_EXIT"):
+                                        ws.unsubscribe(token)
+                                    else:
+                                        # A valid quote does not mean the ledger commit succeeded.
+                                        # Queue the request so the engine retries after DB recovery.
+                                        import json
+                                        db.execute(
+                                            "INSERT INTO commands (command, payload, status, created_at) VALUES (?, ?, 'PENDING', ?)",
+                                            (
+                                                "CLOSE_POSITION",
+                                                json.dumps({"pos_id": pos_id}),
+                                                datetime.now(timezone.utc).isoformat(),
+                                            ),
+                                        )
+                                        logger.error(
+                                            "Manual EXIT for %s could not be committed; queued for retry.",
+                                            symbol,
+                                        )
                                 else:
                                     # Preserve the user's exit request and let the engine retry
                                     # when a fresh quote is available; never substitute entry price.
@@ -243,44 +261,80 @@ async def run_system():
                                         symbol,
                                     )
                             else:
-                                # It's pending entry, so we cancel
-                                pos_manager.mark_signal_expired(signal_id, "MANUAL_CANCEL")
-                                
+                                # An EXIT reply cancels only a signal that is still waiting to enter.
+                                if signal_row.get("status") == "WATCHING_ENTRY":
+                                    pos_manager.cancel_pending_signal(signal_id, "MANUAL_CANCEL")
+                                else:
+                                    logger.warning(
+                                        "EXIT_MARKET reply ignored for %s: no open position or pending entry exists.",
+                                        signal_id,
+                                    )
+
                         elif action == "CANCEL":
-                            pos_manager.mark_signal_expired(signal_id, "MANUAL_CANCEL")
-                            
-                        elif action in ["MODIFY_TARGET", "MODIFY_SL"] and price is not None:
-                            # 1. Always update the base signal (even if it hasn't entered yet)
-                            if action == "MODIFY_TARGET":
-                                db.execute("UPDATE signals SET target_1 = ? WHERE id = ?", (price, signal_id))
+                            # CANCEL must never alter an already-entered/closed signal.
+                            if signal_row.get("status") == "WATCHING_ENTRY":
+                                pos_manager.cancel_pending_signal(signal_id, "MANUAL_CANCEL")
                             else:
-                                db.execute("UPDATE signals SET stop_loss = ? WHERE id = ?", (price, signal_id))
-                                
+                                logger.warning(
+                                    "CANCEL reply ignored for %s because it is no longer pending.",
+                                    signal_id,
+                                )
+                                if not broadcast_msg:
+                                    broadcast_msg = (
+                                        "⚠️ This trade is already entered or completed. "
+                                        "Use an explicit EXIT request to close an open position."
+                                    )
+
+                        elif action in ["MODIFY_TARGET", "MODIFY_SL"] and price is not None:
+                            # Only pending signals and open positions may be adjusted.
+                            pos_row = db.fetch_one(
+                                """SELECT id, symbol, entry_price, target_1, stop_loss, trade_type
+                                   FROM positions WHERE signal_id = ? AND status = 'OPEN'""",
+                                (signal_id,),
+                            )
+                            valid, reason = validate_reply_price_update(
+                                action, price, signal_row, pos_row
+                            )
+                            if not valid:
+                                logger.warning(
+                                    "Rejected %s reply for signal %s (price=%r): %s",
+                                    action, signal_id, price, reason,
+                                )
+                                if not broadcast_msg:
+                                    broadcast_msg = f"⚠️ Update rejected: {reason}."
+                                continue
+
+                            price = float(price)
+                            field = "target_1" if action == "MODIFY_TARGET" else "stop_loss"
+                            try:
+                                # Update signal and open position in one SQLite transaction.
+                                with db.transaction() as conn:
+                                    signal_update = conn.execute(
+                                        f"UPDATE signals SET {field} = ? WHERE id = ? AND status IN ('WATCHING_ENTRY', 'ENTERED')",
+                                        (price, signal_id),
+                                    )
+                                    if signal_update.rowcount != 1:
+                                        raise RuntimeError("Signal is no longer pending or entered")
+                                    if pos_row:
+                                        position_update = conn.execute(
+                                            f"UPDATE positions SET {field} = ? WHERE id = ? AND status = 'OPEN'",
+                                            (price, pos_row["id"]),
+                                        )
+                                        if position_update.rowcount != 1:
+                                            raise RuntimeError("Position is no longer open")
+                            except Exception:
+                                logger.exception("Could not commit %s update for signal %s", action, signal_id)
+                                if not broadcast_msg:
+                                    broadcast_msg = "⚠️ Update could not be saved. No in-memory values were changed."
+                                continue
+
                             with pos_manager._state_lock:
                                 if signal_id in pos_manager.active_signals:
-                                    if action == "MODIFY_TARGET":
-                                        pos_manager.active_signals[signal_id]["target_1"] = price
-                                    else:
-                                        pos_manager.active_signals[signal_id]["stop_loss"] = price
+                                    pos_manager.active_signals[signal_id][field] = price
+                                if pos_row and pos_row["id"] in pos_manager.active_positions:
+                                    pos_manager.active_positions[pos_row["id"]][field] = price
 
-                            # 2. If the position is already OPEN, update the active position too
-                            pos_row = db.fetch_one("SELECT id, symbol FROM positions WHERE signal_id = ? AND status = 'OPEN'", (signal_id,))
                             symbol_name = pos_row["symbol"] if pos_row else "Pending Trade"
-
-                            if pos_row:
-                                if action == "MODIFY_TARGET":
-                                    db.execute("UPDATE positions SET target_1 = ? WHERE id = ?", (price, pos_row["id"]))
-                                else:
-                                    db.execute("UPDATE positions SET stop_loss = ? WHERE id = ?", (price, pos_row["id"]))
-                                    
-                                with pos_manager._state_lock:
-                                    if pos_row["id"] in pos_manager.active_positions:
-                                        if action == "MODIFY_TARGET":
-                                            pos_manager.active_positions[pos_row["id"]]["target_1"] = price
-                                        else:
-                                            pos_manager.active_positions[pos_row["id"]]["stop_loss"] = price
-                                    
-                            # Capture message for broadcast (only need to do it once)
                             if not broadcast_msg:
                                 broadcast_msg = f"⚠️ UPDATE: {symbol_name}\n"
                                 broadcast_msg += f"New Target: {price}" if action == "MODIFY_TARGET" else f"New Stop Loss: {price}"

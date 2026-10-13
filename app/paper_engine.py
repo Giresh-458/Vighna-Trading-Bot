@@ -27,6 +27,58 @@ class PaperEngine:
         self.is_running = False
         self._last_eod_attempt_monotonic = 0.0
         self._last_manual_exit_attempts: Dict[int, float] = {}
+        # Shared limiter keeps quote-recovery REST calls below typical broker rate limits.
+        self._last_position_rest_attempt_monotonic = None
+        self._last_position_rest_position_id = None
+        self.POSITION_REST_RETRY_SECONDS = 0.5
+
+    def _fetch_position_rest_ltp(self, pos: dict, pos_id=None):
+        """Fetch an emergency quote for exit monitoring; never writes it as a WS tick."""
+        now = time.monotonic()
+        last_attempt = self._last_position_rest_attempt_monotonic
+        if last_attempt is not None and now - last_attempt < self.POSITION_REST_RETRY_SECONDS:
+            return None
+
+        api = getattr(getattr(self.ws, "auth", None), "api", None)
+        if api is None:
+            return None
+
+        token = str(pos.get("token", ""))
+        symbol = str(pos.get("symbol", ""))
+        exch_seg = None
+        inst_manager = getattr(self.pos_manager, "inst_manager", None)
+        token_map = getattr(inst_manager, "token_to_instrument", {}) if inst_manager else {}
+        if isinstance(token_map, dict) and token in token_map:
+            exch_seg = token_map[token].get("exch_seg")
+
+        if not exch_seg:
+            upper_symbol = symbol.upper()
+            if upper_symbol.startswith(("SENSEX", "BANKEX")):
+                exch_seg = "BFO"
+            elif any(name in upper_symbol for name in (
+                "CRUDE", "NATURAL", "NATGAS", "GOLD", "SILVER", "COPPER", "ZINC", "ALUM"
+            )):
+                exch_seg = "MCX"
+            else:
+                exch_seg = "NFO"
+
+        self._last_position_rest_attempt_monotonic = now
+        self._last_position_rest_position_id = pos_id
+        try:
+            response = api.ltpData(exch_seg, symbol, token)
+            if isinstance(response, dict) and response.get("status") and isinstance(response.get("data"), dict):
+                candidate = response["data"].get("ltp")
+                if candidate is not None:
+                    candidate = float(candidate)
+                    if candidate > 0:
+                        logger.warning(
+                            "Using fresh Angel One REST quote for exit monitoring of %s after stale WebSocket data",
+                            symbol,
+                        )
+                        return candidate
+        except Exception as exc:
+            logger.warning("REST quote recovery failed for %s: %s", symbol, exc)
+        return None
 
     def check_signals(self):
         """Checks waiting signals for entry or expiry."""
@@ -99,48 +151,68 @@ class PaperEngine:
                 self.pos_manager.execute_entry(sig_id, ltp)
 
     def check_positions(self):
-        """Checks open positions for Target or SL using only fresh market data."""
+        """Check target/SL with fresh WebSocket data, falling back to throttled REST quotes."""
         with self.pos_manager._state_lock:
             pos_ids = list(self.pos_manager.active_positions.keys())
+
+        # Rotate the first candidate after the last REST attempt. Otherwise, with several
+        # stale positions, the first one could consume every global rate-limit slot.
+        last_pos_id = self._last_position_rest_position_id
+        if last_pos_id in pos_ids:
+            last_index = pos_ids.index(last_pos_id)
+            pos_ids = pos_ids[last_index + 1:] + pos_ids[:last_index + 1]
+
         for pos_id in pos_ids:
             pos = self.pos_manager.active_positions.get(pos_id)
-            if not pos: continue
-            
-            token = pos["token"]
-            # Stale prices must not trigger simulated exits or be written as live ticks.
-            ltp = self.md_cache.get_ltp(token, max_age_ms=MAX_TICK_AGE_MS)
-            if ltp is None:
+            if not pos:
                 continue
-            try:
-                self.pos_manager.db.update_live_tick(token, pos["symbol"], ltp)
-            except Exception:
-                pass
-            
+
+            token = str(pos["token"])
+            ltp = self.md_cache.get_ltp(token, max_age_ms=MAX_TICK_AGE_MS)
+            price_source = "WEBSOCKET"
+            if ltp is None or ltp <= 0:
+                # Unlike entry checks, an open position must keep attempting a safe exit quote.
+                # One REST call at a time is shared across all position checks.
+                ltp = self._fetch_position_rest_ltp(pos, pos_id=pos_id)
+                price_source = "REST"
+            if ltp is None or ltp <= 0:
+                continue
+
+            # Persist the original WebSocket receipt timestamp, not the polling time.
+            # Otherwise an unchanged/stale tick would become "fresh" on every engine cycle.
+            if price_source == "WEBSOCKET":
+                try:
+                    raw_tick = self.md_cache.get_raw_tick(token) or {}
+                    received_ns = raw_tick.get("received_timestamp_ns")
+                    received_at = (
+                        datetime.fromtimestamp(received_ns / 1_000_000_000, timezone.utc).isoformat()
+                        if received_ns is not None
+                        else None
+                    )
+                    self.pos_manager.db.update_live_tick(
+                        token, pos["symbol"], ltp, updated_at=received_at
+                    )
+                except Exception:
+                    logger.debug("Could not persist market tick for %s", pos["symbol"], exc_info=True)
+
             trade_type = pos.get("trade_type", "LONG")
-            
             if trade_type == "LONG":
-                # Target 1 (EXIT ENTIRE POSITION)
                 if ltp >= pos["target_1"]:
-                    self.pos_manager.execute_exit(pos_id, ltp, SignalStatus.TARGET_HIT.value)
-                    self.ws.unsubscribe(token)
+                    if self.pos_manager.execute_exit(pos_id, ltp, SignalStatus.TARGET_HIT.value):
+                        self.ws.unsubscribe(token)
                     continue
-                    
-                # Stop Loss (EXIT ENTIRE POSITION)
                 if ltp <= pos["stop_loss"]:
-                    self.pos_manager.execute_exit(pos_id, ltp, SignalStatus.SL_HIT.value)
-                    self.ws.unsubscribe(token)
+                    if self.pos_manager.execute_exit(pos_id, ltp, SignalStatus.SL_HIT.value):
+                        self.ws.unsubscribe(token)
                     continue
             else:
-                # Target 1 for SHORT (EXIT ENTIRE POSITION)
                 if ltp <= pos["target_1"]:
-                    self.pos_manager.execute_exit(pos_id, ltp, SignalStatus.TARGET_HIT.value)
-                    self.ws.unsubscribe(token)
+                    if self.pos_manager.execute_exit(pos_id, ltp, SignalStatus.TARGET_HIT.value):
+                        self.ws.unsubscribe(token)
                     continue
-                    
-                # Stop Loss for SHORT (EXIT ENTIRE POSITION)
                 if ltp >= pos["stop_loss"]:
-                    self.pos_manager.execute_exit(pos_id, ltp, SignalStatus.SL_HIT.value)
-                    self.ws.unsubscribe(token)
+                    if self.pos_manager.execute_exit(pos_id, ltp, SignalStatus.SL_HIT.value):
+                        self.ws.unsubscribe(token)
                     continue
 
     def is_eod(self) -> bool:
@@ -163,9 +235,14 @@ class PaperEngine:
         is_bfo_eod = current_minutes >= (15 * 60 + 30)  # 15:30 IST
         is_hz_eod = current_minutes >= (15 * 60 + 40)   # 15:40 IST
 
-        # 1. Close all active positions
+        # 1. Close all active positions. Rotate after a failed REST attempt so a position
+        # without quotes cannot starve every later position during repeated EOD cycles.
         with self.pos_manager._state_lock:
             pos_ids = list(self.pos_manager.active_positions.keys())
+        last_pos_id = self._last_position_rest_position_id
+        if last_pos_id in pos_ids:
+            last_index = pos_ids.index(last_pos_id)
+            pos_ids = pos_ids[last_index + 1:] + pos_ids[:last_index + 1]
         for pos_id in pos_ids:
             pos = self.pos_manager.active_positions.get(pos_id)
             if not pos: continue
@@ -186,25 +263,10 @@ class PaperEngine:
             if segment == "hero_zero" and not is_hz_eod:
                 continue  # Skip Hero-Zero until 15:40
             
-            # Prefer a fresh WebSocket tick; otherwise ask Angel One for the current LTP.
+            # Prefer a fresh WebSocket tick; otherwise use the shared, throttled REST fallback.
             ltp = self.md_cache.get_ltp(token, max_age_ms=MAX_TICK_AGE_MS)
-            if ltp is None:
-                api = getattr(getattr(self.ws, "auth", None), "api", None)
-                if api:
-                    try:
-                        response = api.ltpData(exch_seg, pos["symbol"], str(token))
-                        if (
-                            isinstance(response, dict)
-                            and response.get("status")
-                            and isinstance(response.get("data"), dict)
-                        ):
-                            candidate = response["data"].get("ltp")
-                            if candidate is not None:
-                                candidate = float(candidate)
-                                if candidate > 0:
-                                    ltp = candidate
-                    except Exception as exc:
-                        logger.warning("EOD live LTP lookup failed for %s: %s", pos["symbol"], exc)
+            if ltp is None or ltp <= 0:
+                ltp = self._fetch_position_rest_ltp(pos, pos_id=pos_id)
 
             if ltp is None or ltp <= 0:
                 # Never fabricate a close price from entry price; keep the position visible/open
@@ -216,8 +278,10 @@ class PaperEngine:
                 continue
 
             logger.info(f"EOD Square-Off: Closing {pos['symbol']} at {ltp} (Reason: EOD_CLOSED)")
-            self.pos_manager.execute_exit(pos_id, ltp, SignalStatus.EOD_CLOSED.value)
-            self.ws.unsubscribe(token)
+            if self.pos_manager.execute_exit(pos_id, ltp, SignalStatus.EOD_CLOSED.value):
+                self.ws.unsubscribe(token)
+            else:
+                logger.error("EOD square-off for %s did not commit; keeping position open for retry.", pos["symbol"])
             
         # 2. Expire all pending entry signals
         with self.pos_manager._state_lock:
@@ -308,6 +372,23 @@ class PaperEngine:
                 self._last_manual_exit_attempts[cmd_id] = now_monotonic
 
                 pos = self.pos_manager.active_positions.get(pos_id)
+                if not pos:
+                    # Recover the position if the database is authoritative but the in-memory
+                    # copy was lost. If it is already closed/deleted, the request is complete.
+                    db_pos = self.pos_manager.db.fetch_one(
+                        "SELECT * FROM positions WHERE id = ? AND status = 'OPEN'", (pos_id,)
+                    )
+                    if db_pos:
+                        with self.pos_manager._state_lock:
+                            self.pos_manager.active_positions.setdefault(pos_id, dict(db_pos))
+                            pos = self.pos_manager.active_positions.get(pos_id)
+                    else:
+                        self.pos_manager.db.execute(
+                            "UPDATE commands SET status = 'DONE' WHERE id = ?", (cmd_id,)
+                        )
+                        self._last_manual_exit_attempts.pop(cmd_id, None)
+                        continue
+
                 if pos:
                     token = pos["token"]
                     symbol = pos["symbol"]
@@ -355,7 +436,9 @@ class PaperEngine:
                         live_cmp,
                         cache_ltp,
                     )
-                    self.pos_manager.execute_exit(pos_id, exit_price, "MANUAL_EXIT")
+                    if not self.pos_manager.execute_exit(pos_id, exit_price, "MANUAL_EXIT"):
+                        # Do not mark a manual close command DONE until its ledger commit succeeds.
+                        continue
                     self.ws.unsubscribe(token)
                     self._last_manual_exit_attempts.pop(cmd_id, None)
                 

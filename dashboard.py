@@ -6,6 +6,8 @@ import pandas as pd
 import streamlit as st
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List
+from app.config import INITIAL_CAPITAL, MAX_TICK_AGE_MS
+from app.market_data_cache import is_fresh_persisted_tick
 
 # Page Configuration
 st.set_page_config(
@@ -100,8 +102,11 @@ def load_data():
         cursor.execute("SELECT * FROM signals ORDER BY received_at DESC")
         signals = [dict(row) for row in cursor.fetchall()]
         try:
-            cursor.execute("SELECT token, ltp FROM live_ticks")
-            live_ticks = {str(row["token"]): row["ltp"] for row in cursor.fetchall()}
+            cursor.execute("SELECT token, ltp, updated_at FROM live_ticks")
+            live_ticks = {
+                str(row["token"]): {"ltp": row["ltp"], "updated_at": row["updated_at"]}
+                for row in cursor.fetchall()
+            }
         except Exception:
             live_ticks = {}
     finally:
@@ -117,7 +122,7 @@ def get_angel_session():
     except: pass
     return None
 
-@st.cache_data(ttl=4)
+@st.cache_data(ttl=1)
 def _cached_api_ltp(symbol: str, token: str, exch: str) -> Optional[float]:
     auth = get_angel_session()
     if not auth or not auth.api: return None
@@ -129,8 +134,17 @@ def _cached_api_ltp(symbol: str, token: str, exch: str) -> Optional[float]:
     return None
 
 def fetch_live_ltp(auth, symbol: str, token: str, segment: str, live_ticks: Optional[dict] = None) -> Optional[float]:
-    if live_ticks and str(token) in live_ticks:
-        return float(live_ticks[str(token)])
+    # A persisted WebSocket value without a timestamp cannot be proven current.
+    tick = live_ticks.get(str(token)) if live_ticks else None
+    if isinstance(tick, dict) and tick.get("ltp") is not None:
+        if is_fresh_persisted_tick(tick.get("updated_at"), MAX_TICK_AGE_MS):
+            try:
+                value = float(tick["ltp"])
+                if value > 0:
+                    return value
+            except (TypeError, ValueError):
+                pass
+
     exch = "MCX" if "commodity" in segment else ("BFO" if symbol.startswith("SENSEX") or symbol.startswith("BANKEX") else "NFO")
     return _cached_api_ltp(symbol, str(token), exch)
 
@@ -169,59 +183,95 @@ for t in trades:
     if not pos: continue
     sig = sig_map.get(pos.get("signal_id"), {})
     seg = sig.get("segment", "equity")
-    
+
     t["segment"] = seg
     t["symbol"] = pos["symbol"]
     all_trades_processed.append(t)
-    
+
     if is_today(t["timestamp"]):
         data[seg]["trades_today"].append(t)
     else:
         data[seg]["trades_history"].append(t)
         all_historical_trades.append(t)
 
+initial_cap = float(INITIAL_CAPITAL)
+shared_available_margin = float(state_dict.get("available_margin_total", initial_cap))
+global_blocked_margin = 0.0
+global_unrealized_pnl = 0.0
+missing_quote_count = 0
+
+# Calculate portfolio equity once across every segment, using only fresh quotes.
+for p in positions:
+    if p.get("status") != "OPEN":
+        continue
+    sig = sig_map.get(p.get("signal_id"), {})
+    seg = sig.get("segment", "equity")
+    stored_margin = p.get("margin_used")
+    if stored_margin is not None:
+        margin_used = max(0.0, float(stored_margin))
+    else:
+        is_futures = seg == "commodity_futures" or "FUT" in str(p.get("symbol", "")).upper()
+        margin_used = float(p["entry_price"]) * int(p["quantity"]) * (0.10 if is_futures else 1.0)
+    p["_dashboard_margin_used"] = margin_used
+    global_blocked_margin += margin_used
+
+    live_ltp = fetch_live_ltp(angel_auth, p["symbol"], p["token"], seg, live_ticks)
+    if live_ltp is not None and live_ltp > 0:
+        p["current_ltp"] = live_ltp
+        entry = float(p["entry_price"])
+        qty = int(p["quantity"])
+        p["unrealized_pnl"] = (
+            (live_ltp - entry) * qty
+            if p.get("trade_type", "LONG") == "LONG"
+            else (entry - live_ltp) * qty
+        )
+        global_unrealized_pnl += p["unrealized_pnl"]
+    else:
+        p["current_ltp"] = None
+        p["unrealized_pnl"] = None
+        missing_quote_count += 1
+
+# The dashboard can be opened before the engine performs the one-time legacy
+# migration. Compute the same read-only fallback without summing old segment balances.
+if "available_margin_total" not in state_dict:
+    realized_ledger_pnl = sum(float(t.get("net_pnl") or 0.0) for t in all_trades_processed)
+    shared_available_margin = initial_cap + realized_ledger_pnl - global_blocked_margin
+
+portfolio_equity = shared_available_margin + global_blocked_margin + global_unrealized_pnl
+
 st.title("📊 KB4Trade Portfolio Monitor")
+if missing_quote_count:
+    st.warning(
+        f"{missing_quote_count} open position(s) have no fresh market quote. "
+        "Their unrealized P&L is excluded, so displayed portfolio equity is partial until quotes recover."
+    )
 tabs = st.tabs(["📈 Equity", "🛢️ Commodity Futures", "🛢️ Commodity Options", "🚀 Hero-Zero", "📆 History & Daily Summary", "👥 Subscribers"])
 
-initial_cap = 100000.0
+initial_cap = float(INITIAL_CAPITAL)
 
 # Render Today's Segment Dashboards
 for i, seg in enumerate(segments):
     with tabs[i]:
         st.subheader(f"{seg_names[seg]} - Today's Live Dashboard")
         
-        # Total Capital includes all historical PnL seamlessly
-        avail_margin = float(state_dict.get(f"available_margin_{seg}", initial_cap))
-        
+        # This is one shared cash pool; the balance is intentionally common to all tabs.
+        avail_margin = shared_available_margin
+
         open_pos = [p for p in data[seg]["positions"] if p["status"] == "OPEN"]
         closed_trades_today = data[seg]["trades_today"]
-        
-        total_blocked = 0.0
-        total_unrealized = 0.0
-        
-        for p in open_pos:
-            qty = p["quantity"]
-            entry = p["entry_price"]
-            blocked = entry * qty
-            total_blocked += blocked
-            
-            live_ltp = fetch_live_ltp(angel_auth, p["symbol"], p["token"], seg, live_ticks)
-            if live_ltp is not None:
-                p["current_ltp"] = live_ltp
-                p["unrealized_pnl"] = (live_ltp - entry) * qty if p.get("trade_type", "LONG") == "LONG" else (entry - live_ltp) * qty
-            else:
-                p["current_ltp"] = entry
-                p["unrealized_pnl"] = 0.0
-            total_unrealized += p["unrealized_pnl"]
-            
+        total_blocked = sum(float(p.get("_dashboard_margin_used", 0.0)) for p in open_pos)
+        total_unrealized = sum(
+            float(p["unrealized_pnl"]) for p in open_pos if p.get("unrealized_pnl") is not None
+        )
+
         today_realized = sum(t["net_pnl"] for t in closed_trades_today)
-        port_val = avail_margin + total_blocked + total_unrealized
-        
+        port_val = portfolio_equity
+
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.markdown(f"""<div class="metric-card"><div class="metric-title">Total Segment Capital</div><div class="metric-value">₹{port_val:,.2f}</div><div class="metric-sub {'positive' if port_val >= initial_cap else 'negative'}">{((port_val - initial_cap)/initial_cap)*100:+.2f}% Lifetime</div></div>""", unsafe_allow_html=True)
+            st.markdown(f"""<div class="metric-card"><div class="metric-title">Total Portfolio Equity</div><div class="metric-value">₹{port_val:,.2f}</div><div class="metric-sub {'positive' if port_val >= initial_cap else 'negative'}">{((port_val - initial_cap)/initial_cap)*100:+.2f}% Lifetime</div></div>""", unsafe_allow_html=True)
         with col2:
-            st.markdown(f"""<div class="metric-card"><div class="metric-title">Available Margin</div><div class="metric-value neutral">₹{avail_margin:,.2f}</div><div class="metric-sub">Blocked: ₹{total_blocked:,.2f}</div></div>""", unsafe_allow_html=True)
+            st.markdown(f"""<div class="metric-card"><div class="metric-title">Shared Available Cash</div><div class="metric-value neutral">₹{avail_margin:,.2f}</div><div class="metric-sub">Blocked in this segment: ₹{total_blocked:,.2f}</div></div>""", unsafe_allow_html=True)
         with col3:
             st.markdown(f"""<div class="metric-card"><div class="metric-title">Today's Realized P&L</div><div class="metric-value {'positive' if today_realized >= 0 else 'negative'}">{'+' if today_realized >= 0 else ''}₹{today_realized:,.2f}</div><div class="metric-sub">{len(closed_trades_today)} trades closed today</div></div>""", unsafe_allow_html=True)
         with col4:
@@ -246,10 +296,16 @@ for i, seg in enumerate(segments):
                 cols[1].write(p.get("trade_type", "LONG"))
                 cols[2].write(str(p["quantity"]))
                 cols[3].write(f"₹{p['entry_price']:.2f}")
-                cols[4].write(f"₹{p['current_ltp']:.2f}")
-                
-                pnl_color = "green" if p['unrealized_pnl'] >= 0 else "red"
-                cols[5].markdown(f"<span style='color:{pnl_color}'>₹{p['unrealized_pnl']:,.2f}</span>", unsafe_allow_html=True)
+                cols[4].write(f"₹{p['current_ltp']:.2f}" if p.get("current_ltp") is not None else "STALE / N/A")
+
+                if p.get("unrealized_pnl") is None:
+                    cols[5].write("Unavailable — quote missing")
+                else:
+                    pnl_color = "green" if p["unrealized_pnl"] >= 0 else "red"
+                    cols[5].markdown(
+                        f"<span style='color:{pnl_color}'>₹{p['unrealized_pnl']:,.2f}</span>",
+                        unsafe_allow_html=True,
+                    )
                 
                 if cols[6].button("Close", key=f"close_{p['id']}"):
                     conn = get_db_connection()

@@ -2,7 +2,8 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
-from app.config import PAPER_ONLY, APP_ENV
+from app.config import PAPER_ONLY, APP_ENV, MAX_TICK_AGE_MS
+from app.market_data_cache import is_fresh_persisted_tick
 
 logger = logging.getLogger(__name__)
 
@@ -200,17 +201,28 @@ class RealOrderManager:
         is_bfo = (exch == "BFO")
         order_type = "LIMIT" if is_bfo else "MARKET"
 
-        # For exit limit price on BFO, fetch last tick or default to 0.05
+        # BFO exits require a genuinely fresh persisted WebSocket quote. Never submit
+        # a made-up limit price or trust an old quote if current data is unavailable.
         price_str = "0"
         if is_bfo:
-            exit_ltp = 100.0  # Safe default if unavailable
             try:
-                row = self.db.fetch_one("SELECT ltp FROM live_ticks WHERE token = ?", (str(token),))
-                if row and row.get("ltp"):
-                    exit_ltp = float(row["ltp"])
+                row = self.db.fetch_one(
+                    "SELECT ltp, updated_at FROM live_ticks WHERE token = ?", (str(token),)
+                )
+                if not row or not is_fresh_persisted_tick(row.get("updated_at"), MAX_TICK_AGE_MS):
+                    logger.error(
+                        "Refusing BFO live exit for %s: no fresh quote is available.",
+                        symbol,
+                    )
+                    return None
+                exit_ltp = float(row.get("ltp") or 0.0)
+                if exit_ltp <= 0:
+                    logger.error("Refusing BFO live exit for %s: invalid quote.", symbol)
+                    return None
+                price_str = self._calculate_limit_price(exit_ltp, tx_type)
             except Exception:
-                pass
-            price_str = self._calculate_limit_price(exit_ltp, tx_type)
+                logger.exception("Refusing BFO live exit for %s: quote validation failed.", symbol)
+                return None
 
         order_params = {
             "variety": "NORMAL",

@@ -203,6 +203,25 @@ class PositionManager:
                      (f" (paired with {paired_signal_id})" if paired_signal_id else ""))
         return signal_id
 
+    def cancel_pending_signal(self, signal_id: str, reason: str = "MANUAL_CANCEL") -> bool:
+        """Cancel only a still-pending signal, with a DB status guard against entry races."""
+        try:
+            with self.db.transaction() as conn:
+                cursor = conn.execute(
+                    "UPDATE signals SET status = ? WHERE id = ? AND status = ?",
+                    (reason, signal_id, SignalStatus.WATCHING_ENTRY.value),
+                )
+                cancelled = cursor.rowcount == 1
+        except Exception:
+            logger.exception("Could not cancel pending signal %s", signal_id)
+            return False
+
+        if cancelled:
+            with self._state_lock:
+                self.active_signals.pop(signal_id, None)
+            logger.info("Pending signal %s marked as %s", signal_id, reason)
+        return cancelled
+
     def mark_signal_expired(self, signal_id: str, reason: str):
         with self._state_lock:
             if signal_id in self.active_signals:
@@ -211,79 +230,120 @@ class PositionManager:
         logger.info(f"Signal {signal_id} marked as {reason}")
 
     def execute_entry(self, signal_id: str, ltp: float):
-        sig = self.active_signals.get(signal_id)
+        """Atomically reserve shared margin, create the position, and consume the signal."""
+        try:
+            ltp = float(ltp)
+        except (TypeError, ValueError):
+            logger.warning("Entry skipped for %s: invalid LTP %r", signal_id, ltp)
+            return
+        if ltp <= 0:
+            logger.warning("Entry skipped for %s: LTP must be positive", signal_id)
+            return
+
+        with self._state_lock:
+            sig = self.active_signals.get(signal_id)
         if not sig:
             return
-            
+
         inst = sig.get("_instrument")
         if not inst:
-            logger.error(f"Cannot execute entry for {signal_id}, missing instrument context")
+            logger.error("Cannot execute entry for %s: missing instrument context", signal_id)
             return
-            
+
         segment = sig.get("segment", "equity")
-        
-        # Trading policy: always execute exactly one lot per accepted signal.
         quantity = int(inst["lotsize"])
-        
-        required_margin = ltp * quantity
-        
-        # Apply realistic 10% margin for Futures, Options buyers pay full premium
-        if segment == "commodity_futures" or (inst.get("instrumenttype") in ["FUTSTK", "FUTIDX", "FUTCOM"]):
-            required_margin = required_margin * 0.10
-            
-        if not self.portfolio.has_sufficient_margin(segment, required_margin):
-            logger.warning(f"Insufficient {segment} margin to enter {inst['symbol']}. Required: {required_margin}")
-            self.mark_signal_expired(signal_id, SignalStatus.INSUFFICIENT_CAPITAL.value)
+        if quantity <= 0:
+            logger.error("Cannot execute entry for %s: invalid lot size %r", signal_id, quantity)
             return
-            
-        # Block margin
-        self.portfolio.block_margin(segment, required_margin)
-        
-        # Create position
+
+        required_margin = ltp * quantity
+        # Commodity futures and other futures contracts use the configured 10% paper margin.
+        if segment == "commodity_futures" or inst.get("instrumenttype") in ("FUTSTK", "FUTIDX", "FUTCOM"):
+            required_margin *= 0.10
+
         pos_id = str(uuid.uuid4())
         now_str = datetime.now(timezone.utc).isoformat()
-        
-        self.db.execute("""
-            INSERT INTO positions (id, signal_id, token, symbol, entry_price, quantity, entry_time, target_1, stop_loss, status, trade_type)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?)
-        """, (
-            pos_id, signal_id, inst["token"], inst["symbol"], ltp, quantity, now_str,
-            sig["target_1"], sig["stop_loss"], sig["trade_type"]
-        ))
-        
-        # Update signal
-        self.db.execute("UPDATE signals SET status = ? WHERE id = ?", (SignalStatus.ENTERED.value, signal_id))
+        paired_id = sig.get("_paired_signal_id")
+        insufficient = False
+        no_longer_eligible = False
+        entered = False
+
+        try:
+            # Cash, position insertion, signal status, and paired-leg cancellation
+            # share one transaction. A DB error rolls everything back.
+            with self.portfolio.accounting_transaction() as (conn, available):
+                signal_row = conn.execute(
+                    "SELECT status FROM signals WHERE id = ?", (signal_id,)
+                ).fetchone()
+                if signal_row is None or signal_row["status"] != SignalStatus.WATCHING_ENTRY.value:
+                    no_longer_eligible = True
+                elif available < required_margin:
+                    insufficient = True
+                else:
+                    self.portfolio.write_available_margin(conn, available - required_margin)
+                    conn.execute("""
+                        INSERT INTO positions (
+                            id, signal_id, token, symbol, entry_price, quantity, entry_time,
+                            target_1, stop_loss, status, trade_type, margin_used
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?)
+                    """, (
+                        pos_id, signal_id, str(inst["token"]), inst["symbol"], ltp, quantity,
+                        now_str, sig["target_1"], sig["stop_loss"], sig["trade_type"],
+                        required_margin,
+                    ))
+                    updated = conn.execute(
+                        "UPDATE signals SET status = ? WHERE id = ? AND status = ?",
+                        (SignalStatus.ENTERED.value, signal_id, SignalStatus.WATCHING_ENTRY.value),
+                    )
+                    if updated.rowcount != 1:
+                        raise RuntimeError(f"Signal {signal_id} changed while entry was committing")
+                    if paired_id:
+                        conn.execute(
+                            "UPDATE signals SET status = ? WHERE id = ? AND status = ?",
+                            ("PAIRED_CANCELLED", paired_id, SignalStatus.WATCHING_ENTRY.value),
+                        )
+                    entered = True
+        except Exception:
+            logger.exception("Entry transaction failed for signal %s; ledger was not changed", signal_id)
+            return
+
+        if no_longer_eligible:
+            with self._state_lock:
+                self.active_signals.pop(signal_id, None)
+            logger.warning("Entry skipped for signal %s because it is no longer eligible", signal_id)
+            return
+
+        if insufficient:
+            logger.warning(
+                "Insufficient shared paper capital to enter %s. Required: %.2f, Available: %.2f",
+                inst["symbol"], required_margin, self.portfolio.available_margin,
+            )
+            self.mark_signal_expired(signal_id, SignalStatus.INSUFFICIENT_CAPITAL.value)
+            return
+
+        if not entered:
+            return
+
+        pos_dict = {
+            "id": pos_id,
+            "signal_id": signal_id,
+            "token": str(inst["token"]),
+            "symbol": inst["symbol"],
+            "entry_price": ltp,
+            "quantity": quantity,
+            "entry_time": now_str,
+            "target_1": sig["target_1"],
+            "stop_loss": sig["stop_loss"],
+            "status": "OPEN",
+            "trade_type": sig["trade_type"],
+            "margin_used": required_margin,
+        }
         with self._state_lock:
-            # Cancel paired signal (opposite direction) if it exists
-            paired_id = sig.get("_paired_signal_id")
-            del self.active_signals[signal_id]
-        
-        if paired_id:
-            logger.info(f"Cancelling paired signal {paired_id} (opposite direction entered)")
-            self.mark_signal_expired(paired_id, "PAIRED_CANCELLED")
-        
-        # Add to active positions
-        pos_data = self.db.fetch_one("SELECT * FROM positions WHERE id = ?", (pos_id,))
-        if pos_data:
-            pos_dict = dict(pos_data)
-        else:
-            pos_dict = {
-                "id": pos_id,
-                "signal_id": signal_id,
-                "token": inst["token"],
-                "symbol": inst["symbol"],
-                "entry_price": ltp,
-                "quantity": quantity,
-                "entry_time": now_str,
-                "target_1": sig["target_1"],
-                "stop_loss": sig["stop_loss"],
-                "status": "OPEN",
-                "trade_type": sig["trade_type"]
-            }
-        with self._state_lock:
+            self.active_signals.pop(signal_id, None)
+            if paired_id:
+                self.active_signals.pop(paired_id, None)
             self.active_positions[pos_id] = pos_dict
-        
-        # Format the notification message
+
         opt_str = ""
         if sig.get("strike") and sig.get("option_type"):
             opt_str = f"{int(sig['strike'])} {sig['option_type']}"
@@ -291,7 +351,7 @@ class PositionManager:
             opt_str = "FUT (SHORT)"
         elif not sig.get("strike"):
             opt_str = "FUT"
-            
+
         msg = (
             f"✅ **TRADE ENTERED**\n"
             f"#{sig['underlying']} {opt_str}\n"
@@ -299,79 +359,123 @@ class PositionManager:
             f"Target: {sig['target_1']}\n"
             f"SL: {sig['stop_loss']}"
         )
-        
-        logger.info(f"ENTERED {inst['symbol']} at {ltp} (Qty: {quantity})")
+        logger.info(
+            "ENTERED %s at %s (Qty: %s, margin: %.2f, shared cash: %.2f)",
+            inst["symbol"], ltp, quantity, required_margin, self.portfolio.available_margin,
+        )
+
+        # Live mode remains blocked by config until broker fills/status are reconciled.
         if self.real_order_manager:
             try:
-                self.real_order_manager.place_entry_order(signal_id, inst, sig["trade_type"], quantity, ltp, segment)
-            except Exception as e:
-                logger.error(f"Error placing live entry order: {e}")
+                self.real_order_manager.place_entry_order(
+                    signal_id, inst, sig["trade_type"], quantity, ltp, segment
+                )
+            except Exception:
+                logger.exception("Error placing live entry order for %s", signal_id)
 
         if self.on_trade_callback:
             self.on_trade_callback(msg, sig)
 
-    def execute_exit(self, pos_id: str, ltp: float, reason: str):
+    def execute_exit(self, pos_id: str, ltp: float, reason: str) -> bool:
+        """Close an OPEN position atomically; return True only after its ledger commit."""
+        try:
+            ltp = float(ltp)
+        except (TypeError, ValueError):
+            logger.warning("Exit skipped for %s: invalid LTP %r", pos_id, ltp)
+            return False
+        if ltp <= 0:
+            logger.warning("Exit skipped for %s: LTP must be positive", pos_id)
+            return False
+
         with self._state_lock:
-            pos = self.active_positions.pop(pos_id, None)
-        if not pos:
-            return
-            
+            memory_pos = self.active_positions.get(pos_id)
+        if not memory_pos:
+            return False
+
         now_str = datetime.now(timezone.utc).isoformat()
-        quantity = pos["quantity"]
-        entry_price = pos["entry_price"]
-        trade_type = pos.get("trade_type", "LONG")
-        
-        # Fetch segment from signal
-        sig_data = self.db.fetch_one("SELECT underlying, strike, option_type, trade_type, segment FROM signals WHERE id = ?", (pos["signal_id"],))
-        segment = "equity"
-        if sig_data:
-            segment = sig_data.get("segment", "equity")
-                
-        # Calculate PnL and charges
-        if trade_type == "LONG":
-            gross_pnl = (ltp - entry_price) * quantity
-        else:
-            gross_pnl = (entry_price - ltp) * quantity
-            
-        charges_dict = self.charge_engine.calculate_total_trade_charges(entry_price, ltp, quantity, segment, trade_type)
-        total_charges = charges_dict["total_charges"]
-        net_pnl = gross_pnl - total_charges
-                
-        # Reconstruct initial margin that was blocked
-        initial_margin = entry_price * quantity
-        if segment == "commodity_futures" or (sig_data and sig_data.get("instrumenttype") in ["FUTSTK", "FUTIDX", "FUTCOM"]):
-            initial_margin = initial_margin * 0.10
-            
-        # Release initial margin
-        self.portfolio.release_margin(segment, initial_margin)
-        # Apply net PnL
-        self.portfolio.apply_pnl(segment, net_pnl)
-        
-        # Close position
-        self.db.execute("""
-            UPDATE positions 
-            SET status = 'CLOSED', exit_price = ?, exit_time = ?, exit_reason = ?
-            WHERE id = ?
-        """, (ltp, now_str, reason, pos_id))
-        
-        # Record trade
-        self.db.execute("""
-            INSERT INTO trades (position_id, entry_price, exit_price, quantity, gross_pnl, brokerage, taxes, charges, net_pnl, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            pos_id, entry_price, ltp, quantity, gross_pnl,
-            charges_dict["buy"]["brokerage"] + charges_dict["sell"]["brokerage"],
-            charges_dict["buy"]["stt"] + charges_dict["sell"]["stt"],
-            total_charges, net_pnl, now_str
-        ))
-        
-        # Try to parse symbol components for clean notification
+        closed = False
+        already_closed = False
+        try:
+            with self.portfolio.accounting_transaction() as (conn, available):
+                row = conn.execute(
+                    "SELECT * FROM positions WHERE id = ?", (pos_id,)
+                ).fetchone()
+                if row is None or row["status"] != "OPEN":
+                    already_closed = True
+                else:
+                    pos = dict(row)
+                    signal_row = conn.execute(
+                        "SELECT underlying, strike, option_type, trade_type, segment "
+                        "FROM signals WHERE id = ?", (pos["signal_id"],)
+                    ).fetchone()
+                    sig_data = dict(signal_row) if signal_row else {}
+                    segment = sig_data.get("segment", "equity")
+                    trade_type = pos.get("trade_type") or sig_data.get("trade_type") or "LONG"
+                    quantity = int(pos["quantity"])
+                    entry_price = float(pos["entry_price"])
+                    symbol = pos.get("symbol", memory_pos.get("symbol", "unknown"))
+
+                    margin_used = pos.get("margin_used")
+                    if margin_used is None:
+                        is_futures = segment == "commodity_futures" or "FUT" in symbol.upper()
+                        margin_used = entry_price * quantity * (0.10 if is_futures else 1.0)
+                    margin_used = max(0.0, float(margin_used))
+
+                    if trade_type == "LONG":
+                        gross_pnl = (ltp - entry_price) * quantity
+                    else:
+                        gross_pnl = (entry_price - ltp) * quantity
+
+                    charges_dict = self.charge_engine.calculate_total_trade_charges(
+                        entry_price, ltp, quantity, segment, trade_type
+                    )
+                    total_charges = float(charges_dict["total_charges"])
+                    net_pnl = gross_pnl - total_charges
+
+                    # A position must never create two trade rows or release margin twice.
+                    existing_trade = conn.execute(
+                        "SELECT id FROM trades WHERE position_id = ?", (pos_id,)
+                    ).fetchone()
+                    if existing_trade:
+                        raise RuntimeError(f"Position {pos_id} already has a trade ledger row")
+
+                    updated = conn.execute("""
+                        UPDATE positions
+                        SET status = 'CLOSED', exit_price = ?, exit_time = ?, exit_reason = ?
+                        WHERE id = ? AND status = 'OPEN'
+                    """, (ltp, now_str, reason, pos_id))
+                    if updated.rowcount != 1:
+                        already_closed = True
+                    else:
+                        conn.execute("""
+                            INSERT INTO trades (
+                                position_id, entry_price, exit_price, quantity, gross_pnl,
+                                brokerage, taxes, charges, net_pnl, timestamp
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            pos_id, entry_price, ltp, quantity, gross_pnl,
+                            float(charges_dict["buy"]["brokerage"]) + float(charges_dict["sell"]["brokerage"]),
+                            float(charges_dict["buy"]["stt"]) + float(charges_dict["sell"]["stt"]),
+                            total_charges, net_pnl, now_str,
+                        ))
+                        # Release exactly the margin reserved at entry and apply net P&L
+                        # in the same transaction as the position/trade writes.
+                        self.portfolio.write_available_margin(conn, available + margin_used + net_pnl)
+                        closed = True
+        except Exception:
+            logger.exception("Exit transaction failed for position %s; position remains open", pos_id)
+            return False
+
+        if already_closed or not closed:
+            return False
+
+        with self._state_lock:
+            self.active_positions.pop(pos_id, None)
+
         symbol = pos["symbol"]
         opt_str = ""
-        # sig_data already fetched above
-        
         if sig_data:
-            underlying = sig_data["underlying"]
+            underlying = sig_data.get("underlying") or symbol
             if sig_data.get("strike") and sig_data.get("option_type"):
                 opt_str = f"{int(sig_data['strike'])} {sig_data['option_type']}"
             elif sig_data.get("trade_type") == "SHORT" and not sig_data.get("strike"):
@@ -380,21 +484,21 @@ class PositionManager:
                 opt_str = "FUT"
         else:
             underlying = symbol
-            opt_str = ""
 
         icon = "🔴" if net_pnl < 0 else "🟢"
-        
         reason_display = reason.replace("_", " ")
+        logger.info(
+            "EXITED %s at %s (Reason: %s) | Net PnL: ₹%.2f | Shared cash: ₹%.2f",
+            symbol, ltp, reason, net_pnl, self.portfolio.available_margin,
+        )
 
-        logger.info(f"EXITED {pos['symbol']} at {ltp} (Reason: {reason}) | Net PnL: ₹{net_pnl:.2f}")
-
-        # Place real broker exit order if live trading is active.
-        # Main startup currently blocks live mode until broker fill reconciliation exists.
         if self.real_order_manager:
             try:
-                self.real_order_manager.place_exit_order(pos_id, pos["symbol"], pos["token"], trade_type, quantity, segment, reason)
-            except Exception as e:
-                logger.error(f"Error placing live exit order: {e}")
+                self.real_order_manager.place_exit_order(
+                    pos_id, symbol, pos["token"], trade_type, quantity, segment, reason
+                )
+            except Exception:
+                logger.exception("Error placing live exit order for %s", pos_id)
 
         exit_msg = (
             f"{icon} **TRADE EXITED — {reason_display}**\n"
@@ -408,6 +512,7 @@ class PositionManager:
             callback_data = dict(sig_data) if sig_data else {}
             callback_data["segment"] = segment
             self.on_trade_callback(exit_msg, callback_data)
+        return True
 
     def get_all_active_tokens_with_exchange(self) -> Dict[str, str]:
         tokens = {}
