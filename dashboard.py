@@ -241,7 +241,7 @@ if missing_quote_count:
     )
 tabs = st.tabs(["📈 Equity", "🛢️ Commodity Futures", "🛢️ Commodity Options", "🚀 Hero-Zero", "📆 History & Daily Summary", "👥 Subscribers"])
 
-initial_cap = 100000.0
+initial_cap = float(INITIAL_CAPITAL)
 
 # Render Today's Segment Dashboards
 for i, seg in enumerate(segments):
