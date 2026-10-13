@@ -8,6 +8,7 @@ from app.models import ParsedSignal, SignalStatus, TradeType, OptionType
 from app.database import Database
 from app.portfolio import Portfolio
 from app.charge_engine import ChargeEngine
+from app.config import ENTRY_WAIT_SECONDS, COMMODITY_FUTURES_ENTRY_WAIT_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,11 @@ class PositionManager:
             
             # If older than threshold, expire it immediately
             segment = sig_dict.get("segment", "equity")
-            max_wait = 14400 if segment == "commodity_futures" else 300
+            max_wait = (
+                COMMODITY_FUTURES_ENTRY_WAIT_SECONDS
+                if segment == "commodity_futures"
+                else ENTRY_WAIT_SECONDS
+            )
             
             if now - received_ts > max_wait:
                 self.mark_signal_expired(sig_dict["id"], SignalStatus.EXPIRED.value)
