@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import MagicMock
 from app.real_order_manager import RealOrderManager
+import app.real_order_manager as real_order_manager_module
 from app.instrument_manager import InstrumentManager
 from app.models import ParsedSignal, OptionType, TradeType
 
@@ -21,6 +22,31 @@ def test_real_order_manager_paper_safety():
     )
     assert res is None
     assert mock_auth.api.placeOrder.call_count == 0
+
+def test_bfo_live_exit_refuses_stale_price_instead_of_using_default(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setattr(real_order_manager_module, "PAPER_ONLY", False)
+    monkeypatch.setattr(real_order_manager_module, "APP_ENV", "real")
+    auth = MagicMock()
+    db = MagicMock()
+    old_time = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
+    db.fetch_one.return_value = {"ltp": 100.0, "updated_at": old_time}
+    manager = RealOrderManager(auth, db)
+
+    result = manager.place_exit_order(
+        pos_id="position-1",
+        symbol="SENSEX13OCT2668000CE",
+        token="12345",
+        trade_type="LONG",
+        quantity=20,
+        segment="hero_zero",
+        reason="MANUAL_EXIT",
+    )
+
+    assert result is None
+    auth.api._postRequest.assert_not_called()
+
 
 def test_marketable_limit_price_calculation():
     mock_auth = MagicMock()
