@@ -1,5 +1,4 @@
 import pytest
-import time
 from unittest.mock import MagicMock
 from app.position_manager import PositionManager
 from app.models import ParsedSignal, OptionType, SignalStatus
