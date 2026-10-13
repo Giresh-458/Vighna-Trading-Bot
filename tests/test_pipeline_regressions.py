@@ -15,6 +15,7 @@ from app.instrument_manager import InstrumentManager
 from app.models import OptionType, ParsedSignal
 from app.paper_engine import PaperEngine
 from app.position_manager import PositionManager
+from app.reply_action_validator import validate_reply_price_update
 from app.signal_parser import SignalParser
 from app.market_data_cache import MarketDataCache
 
@@ -202,6 +203,46 @@ def test_raw_signal_to_instrument_entry_and_target_exit_end_to_end(tmp_path, mon
     assert trade["net_pnl"] == pytest.approx(122.0)
     assert portfolio.available_margin == pytest.approx(INITIAL_CAPITAL + 122.0)
     ws.unsubscribe.assert_called_once_with(instrument["token"])
+
+
+def test_reply_price_updates_reject_nonpositive_nonfinite_and_crossed_levels():
+    pending = {
+        "status": "WATCHING_ENTRY",
+        "trade_type": "LONG",
+        "entry_low": 10.0,
+        "entry_high": 11.0,
+        "target_1": 15.0,
+        "stop_loss": 8.0,
+    }
+    assert validate_reply_price_update("MODIFY_TARGET", 0, pending)[0] is False
+    assert validate_reply_price_update("MODIFY_TARGET", float("nan"), pending)[0] is False
+    assert validate_reply_price_update("MODIFY_TARGET", 9.0, pending)[0] is False
+    assert validate_reply_price_update("MODIFY_SL", 16.0, pending)[0] is False
+    assert validate_reply_price_update("MODIFY_TARGET", 17.0, pending)[0] is True
+    assert validate_reply_price_update("MODIFY_SL", 7.0, pending)[0] is True
+
+
+def test_reply_price_updates_reject_modification_of_closed_signal():
+    closed = {
+        "status": "ENTERED",
+        "trade_type": "LONG",
+        "entry_low": 10.0,
+        "entry_high": 11.0,
+        "target_1": 15.0,
+        "stop_loss": 8.0,
+    }
+    assert validate_reply_price_update("MODIFY_TARGET", 17.0, closed, position_row=None)[0] is False
+
+
+def test_cancel_pending_signal_does_not_change_entered_signal(tmp_path):
+    db, portfolio, manager = make_sqlite_manager(tmp_path / "cancel-status.sqlite3")
+    signal_id = manager.register_signal(make_signal(), make_instrument())
+    manager.execute_entry(signal_id, 10.0)
+
+    assert manager.cancel_pending_signal(signal_id) is False
+    assert db.fetch_one("SELECT status FROM signals WHERE id = ?", (signal_id,))["status"] == "ENTERED"
+    position = db.fetch_one("SELECT id FROM positions WHERE signal_id = ? AND status = 'OPEN'", (signal_id,))
+    assert position is not None
 
 
 def test_legacy_segment_balances_migrate_without_multiplying_capital(tmp_path):
