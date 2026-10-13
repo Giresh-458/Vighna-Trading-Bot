@@ -2,6 +2,8 @@
 
 A robust, low-latency automated trading engine that listens to Telegram alert channels in real-time, parses options and futures signals, resolves instruments via Angel One SmartAPI, streams live tick data over WebSocket, and executes trades in either a realistic paper trading environment or live through Angel One SmartAPI.
 
+![Vighna Pipeline Architecture](architecture_pipeline.svg)
+
 ---
 
 ## Key Features

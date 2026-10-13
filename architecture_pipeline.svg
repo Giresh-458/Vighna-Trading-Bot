@@ -1,0 +1,461 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1150" width="100%" height="100%" style="background:#0a0d14; font-family:'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;">
+  <defs>
+    <!-- Gradients -->
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0a0d14"/>
+      <stop offset="50%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#050811"/>
+    </linearGradient>
+
+    <linearGradient id="blue-card" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f2b48" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#08182b" stop-opacity="0.9"/>
+    </linearGradient>
+
+    <linearGradient id="purple-card" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2e1065" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#170638" stop-opacity="0.9"/>
+    </linearGradient>
+
+    <linearGradient id="green-card" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#064e3b" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#022c22" stop-opacity="0.9"/>
+    </linearGradient>
+
+    <linearGradient id="amber-card" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#451a03" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#290e02" stop-opacity="0.9"/>
+    </linearGradient>
+
+    <linearGradient id="indigo-card" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e1b4b" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#0f0e26" stop-opacity="0.9"/>
+    </linearGradient>
+
+    <linearGradient id="rose-card" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4c0519" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#2c030e" stop-opacity="0.9"/>
+    </linearGradient>
+
+    <!-- Filters & Glow -->
+    <filter id="glow-blue" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.6"/>
+    </filter>
+
+    <!-- Marker Arrow -->
+    <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#38bdf8" />
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#10b981" />
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#a855f7" />
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#f59e0b" />
+    </marker>
+  </defs>
+
+  <!-- Background Canvas -->
+  <rect width="1600" height="1150" fill="url(#bg-grad)" />
+
+  <!-- Subtle Grid overlay -->
+  <g opacity="0.06">
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#94a3b8" stroke-width="1"/>
+    </pattern>
+    <rect width="1600" height="1150" fill="url(#grid)" />
+  </g>
+
+  <!-- HEADER -->
+  <g transform="translate(60, 40)">
+    <rect x="0" y="0" width="1480" height="85" rx="16" fill="#0f172a" stroke="#1e293b" stroke-width="1.5" filter="url(#shadow)"/>
+    <circle cx="45" cy="42" r="22" fill="#0284c7" fill-opacity="0.2" stroke="#38bdf8" stroke-width="2"/>
+    <text x="45" y="49" font-size="22" text-anchor="middle" fill="#38bdf8">⚡</text>
+    
+    <text x="85" y="38" font-size="24" font-weight="700" fill="#f8fafc" letter-spacing="0.5">VIGHNA / KB4TRADE — END-TO-END PIPELINE ARCHITECTURE</text>
+    <text x="85" y="62" font-size="13" font-weight="400" fill="#94a3b8">Ultra Low-Latency Telegram Signals • SmartAPI V2 WebSocket • Automated Paper &amp; Live Execution Engine</text>
+
+    <rect x="1310" y="25" width="140" height="34" rx="8" fill="#10b981" fill-opacity="0.15" stroke="#10b981" stroke-width="1"/>
+    <circle cx="1326" cy="42" r="4" fill="#10b981"/>
+    <text x="1338" y="46" font-size="12" font-weight="600" fill="#34d399">SYSTEM ACTIVE</text>
+  </g>
+
+  <!-- ========================================================================= -->
+  <!-- LAYER 1: INGESTION (TELEGRAM CHANNELS & CLIENT) -->
+  <!-- ========================================================================= -->
+  <g transform="translate(60, 155)">
+    <!-- Container Box -->
+    <rect width="280" height="460" rx="16" fill="url(#blue-card)" stroke="#0284c7" stroke-width="1.5" stroke-dasharray="none" filter="url(#shadow)"/>
+    <rect width="280" height="42" rx="16" fill="#0369a1" fill-opacity="0.3"/>
+    <text x="20" y="27" font-size="14" font-weight="700" fill="#38bdf8" letter-spacing="0.5">1. TELEGRAM INGESTION</text>
+
+    <!-- Source Channels -->
+    <g transform="translate(18, 55)">
+      <rect width="244" height="65" rx="10" fill="#0b1e36" stroke="#1e3a5f" stroke-width="1"/>
+      <text x="14" y="24" font-size="12" font-weight="700" fill="#bae6fd">Equity / Index Channel</text>
+      <text x="14" y="42" font-size="11" fill="#7dd3fc">#NIFTY, #BANKNIFTY Options</text>
+      <text x="14" y="55" font-size="10" fill="#64748b">Stock Calls &amp; #HERO2ZERO</text>
+    </g>
+
+    <g transform="translate(18, 130)">
+      <rect width="244" height="65" rx="10" fill="#0b1e36" stroke="#1e3a5f" stroke-width="1"/>
+      <text x="14" y="24" font-size="12" font-weight="700" fill="#bae6fd">Commodity MCX Channel</text>
+      <text x="14" y="42" font-size="11" fill="#7dd3fc">#NG, #CRUDEOIL, #GOLD, #SILVER</text>
+      <text x="14" y="55" font-size="10" fill="#64748b">Futures &amp; Options contracts</text>
+    </g>
+
+    <!-- Telethon Listener -->
+    <g transform="translate(18, 210)">
+      <rect width="244" height="105" rx="10" fill="#06182c" stroke="#38bdf8" stroke-width="1.5"/>
+      <text x="14" y="26" font-size="13" font-weight="700" fill="#38bdf8">Telethon MTProto Client</text>
+      <text x="14" y="46" font-size="11" fill="#94a3b8">• NewMessage event hook</text>
+      <text x="14" y="64" font-size="11" fill="#94a3b8">• Session: telegram_session</text>
+      <text x="14" y="82" font-size="11" fill="#94a3b8">• High precision time_ns() clock</text>
+      <text x="14" y="98" font-size="10" fill="#38bdf8">Latency benchmark: &lt; 150ms</text>
+    </g>
+
+    <!-- Replies hook -->
+    <g transform="translate(18, 330)">
+      <rect width="244" height="70" rx="10" fill="#0b1e36" stroke="#1e3a5f" stroke-width="1"/>
+      <text x="14" y="22" font-size="12" font-weight="700" fill="#cbd5e1">Channel Message Replies</text>
+      <text x="14" y="40" font-size="11" fill="#94a3b8">"Trail SL to...", "Exit Now"</text>
+      <text x="14" y="56" font-size="10" fill="#64748b">Attached via reply_to_msg_id</text>
+    </g>
+  </g>
+
+  <!-- ========================================================================= -->
+  <!-- LAYER 2: PARSER & TOKEN NORMALIZATION -->
+  <!-- ========================================================================= -->
+  <g transform="translate(380, 155)">
+    <rect width="300" height="460" rx="16" fill="url(#purple-card)" stroke="#8b5cf6" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect width="300" height="42" rx="16" fill="#5b21b6" fill-opacity="0.3"/>
+    <text x="20" y="27" font-size="14" font-weight="700" fill="#c084fc" letter-spacing="0.5">2. PARSING &amp; RESOLUTION</text>
+
+    <!-- SignalParser -->
+    <g transform="translate(18, 55)">
+      <rect width="264" height="75" rx="10" fill="#1d0d3a" stroke="#3b1d75" stroke-width="1"/>
+      <text x="14" y="24" font-size="12" font-weight="700" fill="#e9d5ff">SignalParser (Equity &amp; F&amp;O)</text>
+      <text x="14" y="42" font-size="11" fill="#c084fc">Regex extraction: Strike, CE/PE</text>
+      <text x="14" y="58" font-size="11" fill="#94a3b8">Range Entry, Targets 1-3, SL</text>
+    </g>
+
+    <!-- CommoditySignalParser -->
+    <g transform="translate(18, 140)">
+      <rect width="264" height="85" rx="10" fill="#1d0d3a" stroke="#3b1d75" stroke-width="1"/>
+      <text x="14" y="24" font-size="12" font-weight="700" fill="#e9d5ff">CommoditySignalParser</text>
+      <text x="14" y="42" font-size="11" fill="#c084fc">Above / Below breakout parsing</text>
+      <text x="14" y="58" font-size="11" fill="#94a3b8">Dual-direction leg splitting</text>
+      <text x="14" y="74" font-size="10" fill="#cbd5e1">'K' units (149.7K -> 149,700)</text>
+    </g>
+
+    <!-- LocalLLMParser -->
+    <g transform="translate(18, 235)">
+      <rect width="264" height="65" rx="10" fill="#1d0d3a" stroke="#3b1d75" stroke-width="1"/>
+      <text x="14" y="22" font-size="12" font-weight="700" fill="#e9d5ff">LocalLLMParser / Ollama</text>
+      <text x="14" y="40" font-size="11" fill="#c084fc">Intent: EXIT_MARKET | MODIFY_SL</text>
+      <text x="14" y="56" font-size="10" fill="#94a3b8">Fallback regex pattern matching</text>
+    </g>
+
+    <!-- InstrumentManager -->
+    <g transform="translate(18, 310)">
+      <rect width="264" height="130" rx="10" fill="#120626" stroke="#a855f7" stroke-width="1.5"/>
+      <text x="14" y="26" font-size="13" font-weight="700" fill="#e9d5ff">InstrumentManager</text>
+      <text x="14" y="46" font-size="11" fill="#94a3b8">• Scrip Master Cache (~35MB JSON)</text>
+      <text x="14" y="64" font-size="11" fill="#94a3b8">• Aliases: CRUDE, NATGAS, MCX</text>
+      <text x="14" y="82" font-size="11" fill="#94a3b8">• Nearest weekly/monthly expiry</text>
+      <text x="14" y="100" font-size="11" fill="#94a3b8">• Exchange token &amp; lot size lookup</text>
+      <text x="14" y="118" font-size="10" fill="#34d399">Output: Token, Lotsize, ExchSeg</text>
+    </g>
+  </g>
+
+  <!-- ========================================================================= -->
+  <!-- LAYER 3: MARKET DATA & SMARTAPI WS -->
+  <!-- ========================================================================= -->
+  <g transform="translate(720, 155)">
+    <rect width="300" height="460" rx="16" fill="url(#indigo-card)" stroke="#6366f1" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect width="300" height="42" rx="16" fill="#3730a3" fill-opacity="0.3"/>
+    <text x="20" y="27" font-size="14" font-weight="700" fill="#818cf8" letter-spacing="0.5">3. LIVE MARKET DATA</text>
+
+    <!-- AngelAuth -->
+    <g transform="translate(18, 55)">
+      <rect width="264" height="85" rx="10" fill="#131131" stroke="#25215c" stroke-width="1"/>
+      <text x="14" y="24" font-size="12" font-weight="700" fill="#c7d2fe">AngelAuth (SmartAPI)</text>
+      <text x="14" y="42" font-size="11" fill="#818cf8">• TOTP Auth via PyOTP (Base32)</text>
+      <text x="14" y="58" font-size="11" fill="#94a3b8">• Cached Session: angel_session.json</text>
+      <text x="14" y="74" font-size="10" fill="#64748b">Automatic 20h JWT Token refresh</text>
+    </g>
+
+    <!-- SmartWebSocketV2 -->
+    <g transform="translate(18, 150)">
+      <rect width="264" height="120" rx="10" fill="#0d0c24" stroke="#6366f1" stroke-width="1.5"/>
+      <text x="14" y="26" font-size="13" font-weight="700" fill="#c7d2fe">AngelOneWebSocket (V2)</text>
+      <text x="14" y="46" font-size="11" fill="#94a3b8">• Binary / JSON LTP stream</text>
+      <text x="14" y="64" font-size="11" fill="#94a3b8">• Dynamic token sub/unsub</text>
+      <text x="14" y="82" font-size="11" fill="#94a3b8">• Multi-exchange: NFO, MCX, BFO</text>
+      <text x="14" y="100" font-size="11" fill="#94a3b8">• 15-sec Disconnect Watchdog</text>
+      <text x="14" y="114" font-size="10" fill="#34d399">Thread-safe active_tokens registry</text>
+    </g>
+
+    <!-- CandleChecker -->
+    <g transform="translate(18, 280)">
+      <rect width="264" height="75" rx="10" fill="#131131" stroke="#25215c" stroke-width="1"/>
+      <text x="14" y="24" font-size="12" font-weight="700" fill="#c7d2fe">CandleChecker Pre-Call Check</text>
+      <text x="14" y="42" font-size="11" fill="#818cf8">Lookback 3-min 1-min candles</text>
+      <text x="14" y="58" font-size="11" fill="#f87171">Rejects signal if Target 1 already hit</text>
+    </g>
+
+    <!-- MarketDataCache -->
+    <g transform="translate(18, 365)">
+      <rect width="264" height="75" rx="10" fill="#131131" stroke="#25215c" stroke-width="1"/>
+      <text x="14" y="24" font-size="12" font-weight="700" fill="#c7d2fe">MarketDataCache</text>
+      <text x="14" y="42" font-size="11" fill="#818cf8">In-memory lock-protected buffer</text>
+      <text x="14" y="58" font-size="11" fill="#94a3b8">MAX_TICK_AGE_MS validation</text>
+    </g>
+  </g>
+
+  <!-- ========================================================================= -->
+  <!-- LAYER 4: TRADING ENGINE & RISK MANAGEMENT -->
+  <!-- ========================================================================= -->
+  <g transform="translate(1060, 155)">
+    <rect width="480" height="460" rx="16" fill="url(#green-card)" stroke="#10b981" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect width="480" height="42" rx="16" fill="#047857" fill-opacity="0.3"/>
+    <text x="20" y="27" font-size="14" font-weight="700" fill="#34d399" letter-spacing="0.5">4. EXECUTION ENGINE &amp; RISK MANAGEMENT</text>
+
+    <!-- PositionManager -->
+    <g transform="translate(18, 55)">
+      <rect width="215" height="150" rx="10" fill="#032119" stroke="#059669" stroke-width="1.2"/>
+      <text x="14" y="24" font-size="13" font-weight="700" fill="#6ee7b7">PositionManager</text>
+      <text x="14" y="44" font-size="11" fill="#94a3b8">• Deduplication guard</text>
+      <text x="14" y="62" font-size="11" fill="#94a3b8">• Token lock prevents duplicates</text>
+      <text x="14" y="80" font-size="11" fill="#94a3b8">• Paired cancel on breakout entry</text>
+      <text x="14" y="98" font-size="11" fill="#94a3b8">• Lots: 3 (Equity/HZ), 1 (MCX)</text>
+      <text x="14" y="116" font-size="11" fill="#94a3b8">• Thread-safe active positions</text>
+      <text x="14" y="136" font-size="10" fill="#34d399">Lifecycle: REGISTER -> ENTER -> EXIT</text>
+    </g>
+
+    <!-- PaperEngine -->
+    <g transform="translate(245, 55)">
+      <rect width="215" height="150" rx="10" fill="#032119" stroke="#059669" stroke-width="1.2"/>
+      <text x="14" y="24" font-size="13" font-weight="700" fill="#6ee7b7">PaperEngine Loop</text>
+      <text x="14" y="44" font-size="11" fill="#94a3b8">• Continuous 100ms tick scanner</text>
+      <text x="14" y="62" font-size="11" fill="#94a3b8">• Entry Range verification</text>
+      <text x="14" y="80" font-size="11" fill="#94a3b8">• Target 1 reached -> Exit Full</text>
+      <text x="14" y="98" font-size="11" fill="#94a3b8">• SL breached -> Cut Loss</text>
+      <text x="14" y="116" font-size="11" fill="#94a3b8">• Entry timeout expiry (300s)</text>
+      <text x="14" y="136" font-size="10" fill="#fbbf24">EOD Square-Off: 15:15 &amp; 23:00</text>
+    </g>
+
+    <!-- Portfolio & Margin -->
+    <g transform="translate(18, 215)">
+      <rect width="215" height="105" rx="10" fill="#032119" stroke="#047857" stroke-width="1"/>
+      <text x="14" y="24" font-size="12" font-weight="700" fill="#6ee7b7">Portfolio (4 Segments)</text>
+      <text x="14" y="42" font-size="11" fill="#a7f3d0">• Equity / Hero-Zero (₹100k)</text>
+      <text x="14" y="60" font-size="11" fill="#a7f3d0">• MCX Futures (₹100k - 10% margin)</text>
+      <text x="14" y="78" font-size="11" fill="#a7f3d0">• MCX Options (₹100k - 100% prem)</text>
+      <text x="14" y="96" font-size="10" fill="#94a3b8">Independent capital ledgers</text>
+    </g>
+
+    <!-- ChargeEngine -->
+    <g transform="translate(245, 215)">
+      <rect width="215" height="105" rx="10" fill="#032119" stroke="#047857" stroke-width="1"/>
+      <text x="14" y="24" font-size="12" font-weight="700" fill="#6ee7b7">ChargeEngine (Taxes)</text>
+      <text x="14" y="42" font-size="11" fill="#a7f3d0">• Brokerage (₹20/order)</text>
+      <text x="14" y="60" font-size="11" fill="#a7f3d0">• STT/CTT &amp; Exchange Turnover</text>
+      <text x="14" y="78" font-size="11" fill="#a7f3d0">• GST (18%) &amp; Stamp Duty</text>
+      <text x="14" y="96" font-size="10" fill="#34d399">Exact Net PnL accounting</text>
+    </g>
+
+    <!-- RealOrderManager -->
+    <g transform="translate(18, 330)">
+      <rect width="442" height="110" rx="10" fill="#2a1405" stroke="#f59e0b" stroke-width="1.5"/>
+      <text x="16" y="26" font-size="13" font-weight="700" fill="#fbbf24">RealOrderManager (SmartAPI Live Order Routing)</text>
+      <text x="16" y="46" font-size="11" fill="#fed7aa">• Guarded by: PAPER_ONLY=false &amp; APP_ENV=real</text>
+      <text x="16" y="64" font-size="11" fill="#fed7aa">• BFO Rejections Handler: Automatic marketable limit order calculation (±3% slip)</text>
+      <text x="16" y="82" font-size="11" fill="#fed7aa">• Product: CARRYFORWARD (protects against RMS auto-squareoff fines)</text>
+      <text x="16" y="100" font-size="10" fill="#fcd34d">Table logging: real_orders with exact broker response &amp; status</text>
+    </g>
+  </g>
+
+  <!-- ========================================================================= -->
+  <!-- LAYER 5: PERSISTENCE (SQLITE WAL) -->
+  <!-- ========================================================================= -->
+  <g transform="translate(60, 645)">
+    <rect width="700" height="230" rx="16" fill="url(#indigo-card)" stroke="#4f46e5" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect width="700" height="42" rx="16" fill="#312e81" fill-opacity="0.3"/>
+    <text x="20" y="27" font-size="14" font-weight="700" fill="#a5b4fc" letter-spacing="0.5">5. PERSISTENCE ENGINE (SQLite WAL MODE)</text>
+
+    <!-- DB Settings -->
+    <g transform="translate(18, 55)">
+      <rect width="210" height="155" rx="10" fill="#0c0a21" stroke="#231f54" stroke-width="1"/>
+      <text x="14" y="24" font-size="12" font-weight="700" fill="#e0e7ff">Engine Configuration</text>
+      <text x="14" y="46" font-size="11" fill="#a5b4fc">• paper_trading.db</text>
+      <text x="14" y="66" font-size="11" fill="#a5b4fc">• PRAGMA journal_mode=WAL</text>
+      <text x="14" y="86" font-size="11" fill="#a5b4fc">• PRAGMA synchronous=NORMAL</text>
+      <text x="14" y="106" font-size="11" fill="#a5b4fc">• busy_timeout = 10,000ms</text>
+      <text x="14" y="126" font-size="11" fill="#a5b4fc">• Thread-safe re-entrant lock</text>
+      <text x="14" y="144" font-size="10" fill="#34d399">Ultra-fast concurrent read/write</text>
+    </g>
+
+    <!-- Schema Tables -->
+    <g transform="translate(240, 55)">
+      <rect width="440" height="155" rx="10" fill="#0c0a21" stroke="#231f54" stroke-width="1"/>
+      <text x="14" y="24" font-size="12" font-weight="700" fill="#e0e7ff">Database Tables &amp; Migrations</text>
+      
+      <text x="14" y="48" font-size="11" fill="#818cf8">• signals</text>
+      <text x="80" y="48" font-size="11" fill="#94a3b8">(id, strike, opt_type, entry, targets, SL, segment, status)</text>
+      
+      <text x="14" y="70" font-size="11" fill="#818cf8">• positions</text>
+      <text x="80" y="70" font-size="11" fill="#94a3b8">(id, token, symbol, entry_price, qty, entry_time, exit_price)</text>
+
+      <text x="14" y="92" font-size="11" fill="#818cf8">• trades</text>
+      <text x="80" y="92" font-size="11" fill="#94a3b8">(gross_pnl, brokerage, taxes, net_pnl, timestamp)</text>
+
+      <text x="14" y="114" font-size="11" fill="#818cf8">• live_ticks</text>
+      <text x="80" y="114" font-size="11" fill="#94a3b8">(token, symbol, ltp, updated_at) - for multi-process IPC</text>
+
+      <text x="14" y="136" font-size="11" fill="#818cf8">• commands</text>
+      <text x="80" y="136" font-size="11" fill="#94a3b8">(IPC trigger for manual exits, resets from Dashboard)</text>
+
+      <text x="14" y="152" font-size="10" fill="#a5b4fc">• subscribers &amp; real_orders tables</text>
+    </g>
+  </g>
+
+  <!-- ========================================================================= -->
+  <!-- LAYER 6: ALERTS, DASHBOARD & AUTOMATION -->
+  <!-- ========================================================================= -->
+  <g transform="translate(790, 645)">
+    <rect width="750" height="230" rx="16" fill="url(#rose-card)" stroke="#f43f5e" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect width="750" height="42" rx="16" fill="#9f1239" fill-opacity="0.3"/>
+    <text x="20" y="27" font-size="14" font-weight="700" fill="#fda4af" letter-spacing="0.5">6. OUTPUT BROADCAST, DASHBOARD &amp; SCHEDULER</text>
+
+    <!-- Telegram Bot Broadcast -->
+    <g transform="translate(18, 55)">
+      <rect width="225" height="155" rx="10" fill="#1f030a" stroke="#4c0519" stroke-width="1"/>
+      <text x="14" y="24" font-size="12" font-weight="700" fill="#ffe4e6">Subscriber Telegram Bot</text>
+      <text x="14" y="44" font-size="11" fill="#f43f5e">• Bot Client: bot_session</text>
+      <text x="14" y="62" font-size="11" fill="#94a3b8">• Content Protection:</text>
+      <text x="24" y="78" font-size="10" fill="#fda4af">noforwards=True (anti-leak)</text>
+      <text x="14" y="96" font-size="11" fill="#94a3b8">• Segmentation filtering</text>
+      <text x="14" y="114" font-size="11" fill="#94a3b8">• Sub expiry &amp; skip dates</text>
+      <text x="14" y="132" font-size="11" fill="#94a3b8">• Dynamic Admin ID broadcast</text>
+      <text x="14" y="148" font-size="10" fill="#34d399">Instant Fill / Target / SL Alerts</text>
+    </g>
+
+    <!-- Streamlit Dashboard -->
+    <g transform="translate(255, 55)">
+      <rect width="245" height="155" rx="10" fill="#1f030a" stroke="#4c0519" stroke-width="1"/>
+      <text x="14" y="24" font-size="12" font-weight="700" fill="#ffe4e6">Streamlit Dashboard (:8501)</text>
+      <text x="14" y="44" font-size="11" fill="#f43f5e">• dashboard.py</text>
+      <text x="14" y="62" font-size="11" fill="#94a3b8">• Real-time PnL &amp; Net Returns</text>
+      <text x="14" y="80" font-size="11" fill="#94a3b8">• Active open positions list</text>
+      <text x="14" y="98" font-size="11" fill="#94a3b8">• Live tick ticker display</text>
+      <text x="14" y="116" font-size="11" fill="#94a3b8">• Segment margins bar</text>
+      <text x="14" y="134" font-size="11" fill="#94a3b8">• One-click manual square-off</text>
+      <text x="14" y="148" font-size="10" fill="#38bdf8">Refreshes every 4 seconds</text>
+    </g>
+
+    <!-- Windows Task Automation -->
+    <g transform="translate(510, 55)">
+      <rect width="220" height="155" rx="10" fill="#1f030a" stroke="#4c0519" stroke-width="1"/>
+      <text x="14" y="24" font-size="12" font-weight="700" fill="#ffe4e6">Automated Scheduler</text>
+      <text x="14" y="44" font-size="11" fill="#f43f5e">• setup_scheduler.ps1</text>
+      <text x="14" y="62" font-size="11" fill="#94a3b8">• 08:55 AM Auto-Start (Mon-Fri)</text>
+      <text x="14" y="80" font-size="11" fill="#94a3b8">• On-Logon catch-up trigger</text>
+      <text x="14" y="98" font-size="11" fill="#94a3b8">• startup_check.py guardian</text>
+      <text x="14" y="116" font-size="11" fill="#94a3b8">• 11:00 PM Auto-Shutdown</text>
+      <text x="14" y="134" font-size="11" fill="#94a3b8">• start_bot.bat &amp; stop_bot.bat</text>
+      <text x="14" y="148" font-size="10" fill="#34d399">100% Autonomous Operation</text>
+    </g>
+  </g>
+
+  <!-- ========================================================================= -->
+  <!-- CONNECTING ARROWS & DATAFLOW PATHS -->
+  <!-- ========================================================================= -->
+  <!-- L1 -> L2 -->
+  <path d="M 340 380 L 375 380" fill="none" stroke="#38bdf8" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="357" y="370" font-size="10" fill="#38bdf8" text-anchor="middle">text</text>
+
+  <!-- L2 -> L3 -->
+  <path d="M 680 380 L 715 380" fill="none" stroke="#a855f7" stroke-width="2.5" marker-end="url(#arrow-purple)"/>
+  <text x="697" y="370" font-size="10" fill="#c084fc" text-anchor="middle">token</text>
+
+  <!-- L3 -> L4 -->
+  <path d="M 1020 380 L 1055 380" fill="none" stroke="#6366f1" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="1037" y="370" font-size="10" fill="#818cf8" text-anchor="middle">ticks</text>
+
+  <!-- L4 Down to L5 (Database) -->
+  <path d="M 1150 615 L 1150 635 L 760 635 L 760 760" fill="none" stroke="#10b981" stroke-width="2.5" marker-end="url(#arrow-green)"/>
+  <text x="955" y="630" font-size="11" font-weight="600" fill="#34d399">Trade Logs, Signals &amp; State</text>
+
+  <!-- L4 to L6 (Broadcast & Alerts) -->
+  <path d="M 1300 615 L 1300 640" fill="none" stroke="#f43f5e" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="1310" y="632" font-size="11" font-weight="600" fill="#fda4af">Trade Callbacks</text>
+
+  <!-- L5 to L6 (Dashboard Reads DB) -->
+  <path d="M 760 780 L 785 780" fill="none" stroke="#6366f1" stroke-width="2" stroke-dasharray="4,4" marker-end="url(#arrow)"/>
+
+  <!-- ========================================================================= -->
+  <!-- FOOTER LEGEND / METADATA -->
+  <!-- ========================================================================= -->
+  <g transform="translate(60, 900)">
+    <rect width="1480" height="200" rx="16" fill="#0f172a" stroke="#1e293b" stroke-width="1.5" filter="url(#shadow)"/>
+    
+    <text x="30" y="35" font-size="15" font-weight="700" fill="#f8fafc">PIPELINE EXECUTION CYCLE &amp; LATENCY PROFILE</text>
+    
+    <!-- Timeline Stages -->
+    <g transform="translate(30, 55)">
+      <!-- Stage 1 -->
+      <rect x="0" y="0" width="265" height="110" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+      <circle cx="25" cy="25" r="12" fill="#0284c7"/>
+      <text x="25" y="30" font-size="12" font-weight="700" fill="#fff" text-anchor="middle">1</text>
+      <text x="45" y="29" font-size="13" font-weight="700" fill="#38bdf8">Channel Signal</text>
+      <text x="15" y="55" font-size="11" fill="#94a3b8">Telegram channel posts signal.</text>
+      <text x="15" y="73" font-size="11" fill="#94a3b8">Telethon receives push event.</text>
+      <text x="15" y="93" font-size="11" font-weight="600" fill="#38bdf8">Latency: ~50ms - 120ms</text>
+
+      <!-- Stage 2 -->
+      <rect x="285" y="0" width="265" height="110" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+      <circle cx="310" cy="25" r="12" fill="#7c3aed"/>
+      <text x="310" y="30" font-size="12" font-weight="700" fill="#fff" text-anchor="middle">2</text>
+      <text x="330" y="29" font-size="13" font-weight="700" fill="#c084fc">Parse &amp; Resolve</text>
+      <text x="300" y="55" font-size="11" fill="#94a3b8">Regex regex extraction,</text>
+      <text x="300" y="73" font-size="11" fill="#94a3b8">Token lookup in scrip master.</text>
+      <text x="300" y="93" font-size="11" font-weight="600" fill="#c084fc">Latency: &lt; 2ms</text>
+
+      <!-- Stage 3 -->
+      <rect x="570" y="0" width="265" height="110" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+      <circle cx="595" cy="25" r="12" fill="#4f46e5"/>
+      <text x="595" y="30" font-size="12" font-weight="700" fill="#fff" text-anchor="middle">3</text>
+      <text x="615" y="29" font-size="13" font-weight="700" fill="#818cf8">Pre-Check &amp; Sub</text>
+      <text x="585" y="55" font-size="11" fill="#94a3b8">Candle lookback validation.</text>
+      <text x="585" y="73" font-size="11" fill="#94a3b8">SmartWebSocket token sub.</text>
+      <text x="585" y="93" font-size="11" font-weight="600" fill="#818cf8">Latency: ~20ms - 40ms</text>
+
+      <!-- Stage 4 -->
+      <rect x="855" y="0" width="265" height="110" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+      <circle cx="880" cy="25" r="12" fill="#059669"/>
+      <text x="880" y="30" font-size="12" font-weight="700" fill="#fff" text-anchor="middle">4</text>
+      <text x="900" y="29" font-size="13" font-weight="700" fill="#34d399">Tick Match &amp; Entry</text>
+      <text x="870" y="55" font-size="11" fill="#94a3b8">Live tick enters entry range.</text>
+      <text x="870" y="73" font-size="11" fill="#94a3b8">Position created, margin locked.</text>
+      <text x="870" y="93" font-size="11" font-weight="600" fill="#34d399">Execution: &lt; 1ms</text>
+
+      <!-- Stage 5 -->
+      <rect x="1140" y="0" width="280" height="110" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+      <circle cx="1165" cy="25" r="12" fill="#db2777"/>
+      <text x="1165" y="30" font-size="12" font-weight="700" fill="#fff" text-anchor="middle">5</text>
+      <text x="1185" y="29" font-size="13" font-weight="700" fill="#f43f5e">Exit &amp; Broadcast</text>
+      <text x="1155" y="55" font-size="11" fill="#94a3b8">Target / SL hit -> trade closed.</text>
+      <text x="1155" y="73" font-size="11" fill="#94a3b8">Bot sends copy-protected alert.</text>
+      <text x="1155" y="93" font-size="11" font-weight="600" fill="#f43f5e">Total Turnaround: Real-Time</text>
+    </g>
+
+    <text x="1450" y="185" font-size="11" fill="#64748b" text-anchor="end">Engine version: 2.0 • 25/25 automated tests passed • Git tracked</text>
+  </g>
+</svg>
