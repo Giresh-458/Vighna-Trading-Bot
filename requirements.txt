@@ -8,3 +8,5 @@ pyotp>=2.9.0
 streamlit>=1.30.0
 pandas>=2.0.0
 psutil>=5.9.0
+logzero>=1.7.0
+websocket-client>=1.8.0
