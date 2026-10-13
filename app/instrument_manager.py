@@ -51,7 +51,11 @@ class InstrumentManager:
     def _build_indexes(self, data: List[dict]):
         now = datetime.now(timezone.utc)
         today = now.date()
-        
+
+        # Build into fresh maps and publish only after a complete successful refresh.
+        options_map: Dict[str, Dict[float, Dict[str, List[dict]]]] = {}
+        token_to_instrument: Dict[str, dict] = {}
+
         # Only parse NFO options, BFO options, and MCX
         nfo_bfo_options = []
         mcx_instruments = []
@@ -115,21 +119,24 @@ class InstrumentManager:
                 
             opt_type = item["_option_type"]
 
-            if underlying not in self.options_map:
-                self.options_map[underlying] = {}
-            if strike not in self.options_map[underlying]:
-                self.options_map[underlying][strike] = {}
-            if opt_type not in self.options_map[underlying][strike]:
-                self.options_map[underlying][strike][opt_type] = []
-            
-            self.options_map[underlying][strike][opt_type].append(item)
-            self.token_to_instrument[item["token"]] = item
+            if underlying not in options_map:
+                options_map[underlying] = {}
+            if strike not in options_map[underlying]:
+                options_map[underlying][strike] = {}
+            if opt_type not in options_map[underlying][strike]:
+                options_map[underlying][strike][opt_type] = []
 
-        # Sort all lists by expiry date ascending
-        for underlying in self.options_map.values():
-            for strike_dict in underlying.values():
+            options_map[underlying][strike][opt_type].append(item)
+            token_to_instrument[item["token"]] = item
+
+        # Sort all lists by expiry date ascending, then atomically replace old indexes.
+        for underlying_map in options_map.values():
+            for strike_dict in underlying_map.values():
                 for opt_list in strike_dict.values():
                     opt_list.sort(key=lambda x: x["_parsed_expiry"])
+
+        self.options_map = options_map
+        self.token_to_instrument = token_to_instrument
 
     def resolve_signal(self, signal: ParsedSignal) -> Tuple[Optional[dict], Optional[str]]:
         """
