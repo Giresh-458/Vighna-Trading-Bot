@@ -211,3 +211,34 @@ def test_config_refuses_unsafe_live_mode(monkeypatch):
 
     with pytest.raises(ValueError, match="Live trading is blocked"):
         config.validate_config()
+
+
+
+def test_dashboard_manual_close_waits_for_a_fresh_quote():
+    cache = MagicMock()
+    cache.get_ltp.return_value = None
+    ws = MagicMock()
+    ws.auth.api.ltpData.return_value = {"status": False, "data": None}
+
+    manager = MagicMock()
+    manager.inst_manager = None
+    manager.active_positions = {
+        "position-1": {
+            "token": "10001",
+            "symbol": "NIFTY30NOV2623450CE",
+            "entry_price": 10.0,
+        }
+    }
+    manager.db.fetch_all.return_value = [{
+        "id": 17,
+        "command": "CLOSE_POSITION",
+        "payload": '{"pos_id":"position-1","cmp":99.0}',
+        "status": "PENDING",
+    }]
+    engine = PaperEngine(cache, manager, ws)
+
+    engine.process_commands()
+
+    manager.execute_exit.assert_not_called()
+    # The command must remain pending for a later retry instead of being marked DONE.
+    manager.db.execute.assert_not_called()
