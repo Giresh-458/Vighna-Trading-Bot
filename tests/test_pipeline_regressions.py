@@ -1,5 +1,6 @@
 from datetime import date, datetime, timedelta
 from threading import Lock
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -254,7 +255,7 @@ def test_hero_zero_entry_remains_eligible_until_its_own_cutoff():
         "hero-signal": {
             "_instrument": {"token": "hero-token", "exch_seg": "BFO"},
             "segment": "hero_zero",
-            "_received_ts": 1_000_000_000_000,
+            "_received_ts": time.time(),
             "entry_low": 9.0,
             "entry_high": 11.0,
             "target_1": 15.0,
