@@ -219,7 +219,21 @@ def test_reply_price_updates_reject_nonpositive_nonfinite_and_crossed_levels():
     assert validate_reply_price_update("MODIFY_TARGET", 9.0, pending)[0] is False
     assert validate_reply_price_update("MODIFY_SL", 16.0, pending)[0] is False
     assert validate_reply_price_update("MODIFY_TARGET", 17.0, pending)[0] is True
+    assert validate_reply_price_update("MODIFY_SL", 9.5, pending)[0] is False
     assert validate_reply_price_update("MODIFY_SL", 7.0, pending)[0] is True
+
+    pending_short = {
+        "status": "WATCHING_ENTRY",
+        "trade_type": "SHORT",
+        "entry_low": 10.0,
+        "entry_high": 11.0,
+        "target_1": 8.0,
+        "stop_loss": 13.0,
+    }
+    assert validate_reply_price_update("MODIFY_TARGET", 9.0, pending_short)[0] is True
+    assert validate_reply_price_update("MODIFY_TARGET", 10.5, pending_short)[0] is False
+    assert validate_reply_price_update("MODIFY_SL", 10.5, pending_short)[0] is False
+    assert validate_reply_price_update("MODIFY_SL", 12.0, pending_short)[0] is True
 
 
 def test_reply_price_updates_reject_modification_of_closed_signal():
