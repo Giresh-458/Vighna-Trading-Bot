@@ -31,6 +31,7 @@ class PaperEngine:
         self.hz_eod_processed = False
         self._last_eod_date = None
         self._last_eod_attempt_monotonic = 0.0
+        self._last_manual_exit_attempts: Dict[int, float] = {}
 
     def check_signals(self):
         """Checks waiting signals for entry or expiry."""
@@ -180,7 +181,7 @@ class PaperEngine:
                 exch_seg = self.pos_manager.inst_manager.token_to_instrument[token].get("exch_seg", "NFO")
                 
             if exch_seg == "MCX" and not is_mcx_eod:
-                continue  # Skip MCX until 23:30
+                continue  # Skip MCX until 23:00
             if exch_seg == "BFO" and not is_bfo_eod:
                 continue  # Skip BFO until 15:30
             
@@ -295,6 +296,7 @@ class PaperEngine:
             self._last_eod_attempt_monotonic = now_monotonic
 
         if mcx_eod:
+            self.process_commands()
             return  # No supported segment should open new positions after the final cutoff.
 
         self.process_commands()
@@ -311,15 +313,20 @@ class PaperEngine:
             
             if command == "CLOSE_POSITION":
                 pos_id = payload
-                reported_cmp = None
                 try:
                     import json
                     if payload and payload.strip().startswith("{"):
                         p_data = json.loads(payload)
                         pos_id = p_data.get("pos_id", payload)
-                        reported_cmp = p_data.get("cmp")
                 except Exception:
                     pos_id = payload
+
+                # Avoid hammering the broker API while retrying a manual close with no price.
+                now_monotonic = time.monotonic()
+                last_attempt = self._last_manual_exit_attempts.get(cmd_id, 0.0)
+                if now_monotonic - last_attempt < 2.0:
+                    continue
+                self._last_manual_exit_attempts[cmd_id] = now_monotonic
 
                 pos = self.pos_manager.active_positions.get(pos_id)
                 if pos:
@@ -338,19 +345,40 @@ class PaperEngine:
                             elif any(comm in symbol for comm in ["CRUDE", "NATURAL", "GOLD", "SILVER", "COPPER", "ZINC", "ALUM"]):
                                 exch_seg = "MCX"
                             res = self.ws.auth.api.ltpData(exch_seg, symbol, str(token))
-                            if res and res.get("status") and res.get("data"):
-                                live_cmp = float(res["data"]["ltp"])
+                            if (
+                                isinstance(res, dict)
+                                and res.get("status")
+                                and isinstance(res.get("data"), dict)
+                            ):
+                                candidate = res["data"].get("ltp")
+                                if candidate is not None:
+                                    candidate = float(candidate)
+                                    if candidate > 0:
+                                        live_cmp = candidate
                     except Exception as e:
                         logger.warning(f"Could not fetch live REST CMP for {symbol}: {e}")
 
-                    # 2. Priority: Live REST CMP -> Reported UI CMP -> Cache -> Entry Price
-                    raw = self.md_cache.get_raw_tick(token)
-                    cache_ltp = raw["ltp"] if raw else None
-                    
-                    exit_price = live_cmp or reported_cmp or cache_ltp or pos["entry_price"]
-                    logger.info(f"Manual Close Triggered for {pos_id} at {exit_price} (live_cmp={live_cmp}, reported_cmp={reported_cmp}, cache_ltp={cache_ltp})")
+                    # Use only a successful REST quote or a fresh WebSocket tick.
+                    cache_ltp = self.md_cache.get_ltp(token, max_age_ms=MAX_TICK_AGE_MS)
+                    exit_price = live_cmp if live_cmp is not None else cache_ltp
+                    if exit_price is None or exit_price <= 0:
+                        logger.error(
+                            "Manual close for %s deferred: no fresh REST/WebSocket quote is available.",
+                            symbol,
+                        )
+                        # Keep the command PENDING; the throttled loop retries it.
+                        continue
+
+                    logger.info(
+                        "Manual Close Triggered for %s at %s (REST=%s, fresh_tick=%s)",
+                        pos_id,
+                        exit_price,
+                        live_cmp,
+                        cache_ltp,
+                    )
                     self.pos_manager.execute_exit(pos_id, exit_price, "MANUAL_EXIT")
                     self.ws.unsubscribe(token)
+                    self._last_manual_exit_attempts.pop(cmd_id, None)
                 
             self.pos_manager.db.execute("UPDATE commands SET status = 'DONE' WHERE id = ?", (cmd_id,))
             
