@@ -50,6 +50,7 @@ def test_check_eod_squareoff_closes_positions_and_expires_signals():
         }
     }
     mock_md.get_raw_tick.return_value = {"ltp": 125.0}
+    mock_md.get_ltp.return_value = 125.0
     
     # Set up active signal
     mock_pos.active_signals = {
