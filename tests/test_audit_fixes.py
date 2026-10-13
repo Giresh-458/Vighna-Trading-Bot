@@ -82,11 +82,13 @@ def test_duplicate_token_rejection(mock_db, mock_portfolio, mock_charges):
     dup_id = pos_manager.register_signal(signal2, inst)
     assert dup_id is None
 
-def test_websocket_threadsafe_set():
+def test_websocket_threadsafe_set(monkeypatch):
     auth_tokens = {"jwtToken": "t", "apiKey": "k", "clientId": "c", "feedToken": "f"}
     md_cache = MarketDataCache()
     ws = AngelOneWebSocket(auth_tokens, md_cache)
-    
+    # Avoid starting a real reconnect/WebSocket network attempt in a unit test.
+    monkeypatch.setattr(ws, "_schedule_reconnect", lambda delay=5.0: None)
+
     # Concurrent subscribe & unsubscribe should not raise KeyError or crash
     import threading
     def worker():
