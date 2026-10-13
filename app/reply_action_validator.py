@@ -45,8 +45,10 @@ def validate_reply_price_update(
             high = float(signal_row["entry_high"])
         except (KeyError, TypeError, ValueError):
             return False, "Pending signal has no valid entry range"
-        # A pending long target must be above its entry range; a short target below it.
-        reference = high if trade_type == "LONG" else low
+        # For pending signals, targets must be beyond the far side of the entry
+        # range, while stop losses must be beyond the near side of the range.
+        target_reference = high if trade_type == "LONG" else low
+        stop_reference = low if trade_type == "LONG" else high
         current_target = signal_row.get("target_1")
         current_stop = signal_row.get("stop_loss")
 
@@ -57,6 +59,7 @@ def validate_reply_price_update(
         return False, "Existing target/stop value is invalid"
 
     if action == "MODIFY_TARGET":
+        reference = target_reference if position_row is None else reference
         if trade_type == "LONG" and value <= reference:
             return False, "Long target must be above the entry price/range"
         if trade_type == "SHORT" and value >= reference:
@@ -67,6 +70,7 @@ def validate_reply_price_update(
             if trade_type == "SHORT" and value >= current_stop:
                 return False, "Short target must remain below the stop loss"
     else:
+        reference = stop_reference if position_row is None else reference
         if trade_type == "LONG" and value >= reference:
             return False, "Long stop loss must be below the entry price/range"
         if trade_type == "SHORT" and value <= reference:
