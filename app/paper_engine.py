@@ -58,10 +58,10 @@ class PaperEngine:
             exch_seg = inst.get("exch_seg", "NFO")
             if exch_seg == "MCX":
                 entry_cutoff = 23 * 60
-            elif exch_seg == "BFO":
-                entry_cutoff = 15 * 60 + 30
             elif segment == "hero_zero":
                 entry_cutoff = 15 * 60 + 40
+            elif exch_seg == "BFO":
+                entry_cutoff = 15 * 60 + 30
             else:
                 try:
                     cutoff_hour, cutoff_minute = map(int, EOD_CLOSE_TIME.split(":"))
