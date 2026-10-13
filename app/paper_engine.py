@@ -103,7 +103,7 @@ class PaperEngine:
                 self.pos_manager.execute_entry(sig_id, ltp)
 
     def check_positions(self):
-        """Checks open positions for Target or SL. Never stops until one is hit."""
+        """Checks open positions for Target or SL using only fresh market data."""
         with self.pos_manager._state_lock:
             pos_ids = list(self.pos_manager.active_positions.keys())
         for pos_id in pos_ids:
@@ -111,10 +111,7 @@ class PaperEngine:
             if not pos: continue
             
             token = pos["token"]
-            # Always use the last known price — never skip a position.
-            # An illiquid option's last trade at 5.0 is still 5.0
-            # even if that tick was minutes ago.
-            # A stale last-known tick must not trigger a simulated stop/target exit.
+            # Stale prices must not trigger simulated exits or be written as live ticks.
             ltp = self.md_cache.get_ltp(token, max_age_ms=MAX_TICK_AGE_MS)
             if ltp is None:
                 continue
