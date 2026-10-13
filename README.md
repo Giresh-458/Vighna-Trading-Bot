@@ -246,4 +246,4 @@ powershell -ExecutionPolicy Bypass -File setup_scheduler.ps1
 
 - Never commit `.env` or files matching `*.session`, `angel_session.json`, or `*.db`.
 - All session keys, live SQLite databases, and large cache dumps (`scrip_master.json`) are pre-configured in `.gitignore`.
-- Always test in `APP_ENV=paper` before toggling `PAPER_ONLY=false`.
+- Keep `APP_ENV=paper` and `PAPER_ONLY=true` for current validation. The main application rejects live-mode configuration until broker order-fill/status reconciliation is implemented and tested.
