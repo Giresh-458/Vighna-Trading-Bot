@@ -362,6 +362,23 @@ class PaperEngine:
                 self._last_manual_exit_attempts[cmd_id] = now_monotonic
 
                 pos = self.pos_manager.active_positions.get(pos_id)
+                if not pos:
+                    # Recover the position if the database is authoritative but the in-memory
+                    # copy was lost. If it is already closed/deleted, the request is complete.
+                    db_pos = self.pos_manager.db.fetch_one(
+                        "SELECT * FROM positions WHERE id = ? AND status = 'OPEN'", (pos_id,)
+                    )
+                    if db_pos:
+                        with self.pos_manager._state_lock:
+                            self.pos_manager.active_positions.setdefault(pos_id, dict(db_pos))
+                            pos = self.pos_manager.active_positions.get(pos_id)
+                    else:
+                        self.pos_manager.db.execute(
+                            "UPDATE commands SET status = 'DONE' WHERE id = ?", (cmd_id,)
+                        )
+                        self._last_manual_exit_attempts.pop(cmd_id, None)
+                        continue
+
                 if pos:
                     token = pos["token"]
                     symbol = pos["symbol"]
