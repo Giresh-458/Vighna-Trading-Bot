@@ -224,8 +224,24 @@ async def run_system():
 
                                 if exit_price is not None and exit_price > 0:
                                     logger.info(f"Executing manual EXIT for {symbol} at {exit_price} based on Telegram reply.")
-                                    pos_manager.execute_exit(pos_id, exit_price, "MANUAL_EXIT")
-                                    ws.unsubscribe(token)
+                                    if pos_manager.execute_exit(pos_id, exit_price, "MANUAL_EXIT"):
+                                        ws.unsubscribe(token)
+                                    else:
+                                        # A valid quote does not mean the ledger commit succeeded.
+                                        # Queue the request so the engine retries after DB recovery.
+                                        import json
+                                        db.execute(
+                                            "INSERT INTO commands (command, payload, status, created_at) VALUES (?, ?, 'PENDING', ?)",
+                                            (
+                                                "CLOSE_POSITION",
+                                                json.dumps({"pos_id": pos_id}),
+                                                datetime.now(timezone.utc).isoformat(),
+                                            ),
+                                        )
+                                        logger.error(
+                                            "Manual EXIT for %s could not be committed; queued for retry.",
+                                            symbol,
+                                        )
                                 else:
                                     # Preserve the user's exit request and let the engine retry
                                     # when a fresh quote is available; never substitute entry price.
