@@ -10,7 +10,7 @@ class CommoditySignalParser:
     
     # Matches options: #CRUDEOIL 8500 PE OCT or #GOLD 160K CE OCT
     OPTIONS_REGEX = re.compile(
-        r'#?([A-Za-z]+)\s+(\d+(?:\.\d+)?K?)\s+(CE|PE)(?:\s+([A-Za-z]+))?', 
+        r'#?([A-Za-z]+)\s+(\d+(?:\.\d+)?K?)\s+(CE|PE)(?:\s+(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\b(?:\s+\d{2,4})?)?', 
         re.IGNORECASE
     )
     
