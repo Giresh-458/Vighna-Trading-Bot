@@ -1,0 +1,47 @@
+# Environment and credentials
+.env
+.env.*
+!.env.example
+angel_session.json
+
+# Telegram / Telethon session files
+*.session
+*.session-journal
+
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Angel One downloaded instrument master cache (~35MB)
+scrip_master.json
+
+# Logs
+logs/
+*.log
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Pytest & coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
