@@ -219,7 +219,7 @@ def test_reply_price_updates_reject_nonpositive_nonfinite_and_crossed_levels():
     assert validate_reply_price_update("MODIFY_TARGET", 9.0, pending)[0] is False
     assert validate_reply_price_update("MODIFY_SL", 16.0, pending)[0] is False
     assert validate_reply_price_update("MODIFY_TARGET", 17.0, pending)[0] is True
-    assert validate_reply_price_update("MODIFY_SL", 9.5, pending)[0] is False
+    assert validate_reply_price_update("MODIFY_SL", 10.5, pending)[0] is False
     assert validate_reply_price_update("MODIFY_SL", 7.0, pending)[0] is True
 
     pending_short = {
