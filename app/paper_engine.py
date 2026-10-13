@@ -200,7 +200,11 @@ class PaperEngine:
                 if api:
                     try:
                         response = api.ltpData(exch_seg, pos["symbol"], str(token))
-                        if response and response.get("status") and response.get("data"):
+                        if (
+                            isinstance(response, dict)
+                            and response.get("status")
+                            and isinstance(response.get("data"), dict)
+                        ):
                             candidate = response["data"].get("ltp")
                             if candidate is not None:
                                 candidate = float(candidate)
