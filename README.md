@@ -24,9 +24,9 @@ A robust, low-latency automated trading engine that listens to Telegram alert ch
   - Simulates fill execution, multi-segment capital allocation (Equity, Commodity Futures, Commodity Options, Hero-Zero), and realistic margin requirements (10% futures margin, 100% options premium).
   - Accurate Indian brokerage, STT/CTT, exchange transaction charges, stamp duty, SEBI turnover fees, and GST calculation.
   - Automated End-of-Day (EOD) square-off at 15:15 IST (Equity/NSE/BSE) and 23:00 IST (MCX commodities).
-- **Live Execution Engine (`RealOrderManager`)**:
-  - Safety-guarded: strictly inactive unless `APP_ENV=real` and `PAPER_ONLY=false`.
-  - Handles exchange nuances: BSE (`BFO`) market order rejections via marketable limit pricing, freeze quantity limits, and RMS penalties prevention.
+- **Broker Order Integration (`RealOrderManager`)**:
+  - The order placement code exists, but the main application intentionally refuses `APP_ENV=real` with `PAPER_ONLY=false` until broker order-fill/status reconciliation is implemented. This prevents local paper-ledger state from being mistaken for a confirmed broker fill.
+  - Paper mode is the supported mode for the current validation batches. Do not remove the startup guard merely to enable live orders.
 - **Telegram Subscriber Bot & Multi-User Alerts**:
   - Dispatches entry, target, and stop-loss notifications with copy-protection enabled (`noforwards`).
   - Subscriber subscription lifecycle and segment-based filtering.
