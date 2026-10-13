@@ -5,6 +5,24 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
+def is_fresh_persisted_tick(updated_at, max_age_ms: int = 2000, now=None) -> bool:
+    """Return True only when a persisted UTC tick timestamp is within its freshness window."""
+    if not updated_at:
+        return False
+    try:
+        stamp = datetime.fromisoformat(str(updated_at))
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        age_ms = (current.astimezone(timezone.utc) - stamp.astimezone(timezone.utc)).total_seconds() * 1000
+        # Allow a small amount of clock skew, but never accept a substantially future timestamp.
+        return -1000 <= age_ms <= max_age_ms
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
 class MarketDataCache:
     def __init__(self):
         # Maps token -> {ltp, timestamp, exchange_timestamp, received_timestamp_ns}
