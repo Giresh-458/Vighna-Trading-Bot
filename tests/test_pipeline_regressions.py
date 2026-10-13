@@ -242,3 +242,31 @@ def test_dashboard_manual_close_waits_for_a_fresh_quote():
     manager.execute_exit.assert_not_called()
     # The command must remain pending for a later retry instead of being marked DONE.
     manager.db.execute.assert_not_called()
+
+
+
+def test_hero_zero_entry_remains_eligible_until_its_own_cutoff():
+    cache = MagicMock()
+    cache.get_ltp.return_value = 10.0
+    manager = MagicMock()
+    manager._state_lock = Lock()
+    manager.active_signals = {
+        "hero-signal": {
+            "_instrument": {"token": "hero-token", "exch_seg": "BFO"},
+            "segment": "hero_zero",
+            "_received_ts": 1_000_000_000_000,
+            "entry_low": 9.0,
+            "entry_high": 11.0,
+            "target_1": 15.0,
+            "stop_loss": 8.0,
+            "trade_type": "LONG",
+        }
+    }
+    manager.active_positions = {}
+    engine = PaperEngine(cache, manager, MagicMock())
+
+    with patch("app.paper_engine.datetime") as mock_datetime:
+        mock_datetime.now.return_value = datetime(2026, 10, 13, 15, 35, tzinfo=paper_engine_module.IST)
+        engine.check_signals()
+
+    manager.execute_entry.assert_called_once_with("hero-signal", 10.0)
