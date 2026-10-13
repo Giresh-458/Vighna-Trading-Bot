@@ -27,6 +27,7 @@ from app.config import (
     TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_SESSION_NAME, TELEGRAM_CHANNEL_ID,
     COMMODITY_CHANNEL_ID, TELEGRAM_BOT_TOKEN,
     ANGEL_API_KEY, ANGEL_CLIENT_ID, ANGEL_PASSWORD, ANGEL_TOTP_SECRET,
+    MAX_TICK_AGE_MS,
     validate_config
 )
 from app.angel_auth import AngelAuth
@@ -218,15 +219,18 @@ async def run_system():
                                 except Exception as e:
                                     logger.warning(f"Could not fetch live REST CMP for {symbol}: {e}")
 
-                                raw = md_cache.get_raw_tick(token)
-                                exit_price = live_cmp or (raw["ltp"] if raw else None) or pos_row.get("entry_price", 0.0)
-                                
-                                if exit_price > 0:
+                                cached_cmp = md_cache.get_ltp(token, max_age_ms=MAX_TICK_AGE_MS)
+                                exit_price = live_cmp if live_cmp is not None and live_cmp > 0 else cached_cmp
+
+                                if exit_price is not None and exit_price > 0:
                                     logger.info(f"Executing manual EXIT for {symbol} at {exit_price} based on Telegram reply.")
                                     pos_manager.execute_exit(pos_id, exit_price, "MANUAL_EXIT")
                                     ws.unsubscribe(token)
                                 else:
-                                    logger.warning(f"Could not exit {symbol} - no price available.")
+                                    logger.error(
+                                        "Manual EXIT for %s was not executed: no fresh REST/WebSocket price is available.",
+                                        symbol,
+                                    )
                             else:
                                 # It's pending entry, so we cancel
                                 pos_manager.mark_signal_expired(signal_id, "MANUAL_CANCEL")
