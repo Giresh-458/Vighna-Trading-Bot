@@ -106,3 +106,43 @@ SL - 289 ⚠️"""
 def test_parse_invalid_commodity_message():
     assert CommoditySignalParser.parse("Good morning traders") is None
     assert CommoditySignalParser.parse_all("Good morning traders") == []
+
+def test_parse_commodity_options_without_expiry_does_not_consume_entry_label():
+    msg = """TSM - COMMODITIES
+#CRUDEOIL 8500 PE
+
+Entry - Above 370
+Target - 390/410/430
+SL - 330"""
+    sig = CommoditySignalParser.parse(msg)
+    assert sig is not None
+    assert sig.underlying == "CRUDEOIL"
+    assert sig.strike == 8500.0
+    assert sig.option_type == OptionType.PE
+    assert sig.expiry is None
+    assert sig.entry_low == 370.0
+    assert sig.target_1 == 390.0
+    assert sig.stop_loss == 330.0
+
+
+def test_parse_all_dual_direction_commodity_options_without_expiry():
+    msg = """TSM - COMMODITIES
+#CRUDEOIL 8500 PE
+
+Entry - Above 370
+Target - 390/410/430
+SL - 330
+
+Entry - Below 350
+Target - 330/310/290
+SL - 370"""
+    signals = CommoditySignalParser.parse_all(msg)
+    assert len(signals) == 2
+    assert all(signal.expiry is None for signal in signals)
+    assert signals[0].trade_type == TradeType.LONG
+    assert signals[0].entry_low == 370.0
+    assert signals[0].target_1 == 390.0
+    assert signals[1].trade_type == TradeType.SHORT
+    assert signals[1].entry_high == 350.0
+    assert signals[1].target_1 == 330.0
+
