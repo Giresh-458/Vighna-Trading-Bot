@@ -80,13 +80,15 @@ class PositionManager:
         paired_map = {}
         for sig_id, sig in self.active_signals.items():
             msg_id = sig.get("telegram_message_id")
+            channel_id = sig.get("channel_id")
             if msg_id:
-                if msg_id in paired_map:
-                    other_id = paired_map[msg_id]
+                message_key = (channel_id, msg_id)
+                if message_key in paired_map:
+                    other_id = paired_map[message_key]
                     self.active_signals[sig_id]["_paired_signal_id"] = other_id
                     self.active_signals[other_id]["_paired_signal_id"] = sig_id
                 else:
-                    paired_map[msg_id] = sig_id
+                    paired_map[message_key] = sig_id
             
         # Load OPEN positions
         positions = self.db.fetch_all("SELECT * FROM positions WHERE status = 'OPEN'")
@@ -96,9 +98,23 @@ class PositionManager:
     def register_signal(self, signal: ParsedSignal, instrument: dict, paired_signal_id: str = None) -> Optional[str]:
         # Duplicate telegram message check (skip for paired signals — they share the same msg_id)
         if signal.telegram_message_id and not paired_signal_id:
-            existing = self.db.fetch_one("SELECT id FROM signals WHERE telegram_message_id = ?", (signal.telegram_message_id,))
+            if signal.channel_id is not None:
+                existing = self.db.fetch_one(
+                    "SELECT id FROM signals WHERE telegram_message_id = ? AND channel_id = ?",
+                    (signal.telegram_message_id, signal.channel_id),
+                )
+            else:
+                # Compatibility for callers that do not supply a Telegram channel ID.
+                existing = self.db.fetch_one(
+                    "SELECT id FROM signals WHERE telegram_message_id = ? AND channel_id IS NULL",
+                    (signal.telegram_message_id,),
+                )
             if existing:
-                logger.warning(f"Telegram message {signal.telegram_message_id} was already registered. Ignoring duplicate.")
+                logger.warning(
+                    "Telegram message %s in channel %s was already registered. Ignoring duplicate.",
+                    signal.telegram_message_id,
+                    signal.channel_id,
+                )
                 return None
 
         # Duplicate token check: do not double-enter same contract simultaneously
@@ -201,9 +217,8 @@ class PositionManager:
             
         segment = sig.get("segment", "equity")
         
-        # Trade 3 lots for Hero-Zero and Equity, 1 lot for Commodities
-        num_lots = 3 if segment in ["hero_zero", "equity"] else 1
-        quantity = int(inst["lotsize"]) * num_lots
+        # Trading policy: always execute exactly one lot per accepted signal.
+        quantity = int(inst["lotsize"])
         
         required_margin = ltp * quantity
         
@@ -364,26 +379,30 @@ class PositionManager:
 
         icon = "🔴" if net_pnl < 0 else "🟢"
         
-        # If MANUAL_EXIT, TARGET_HIT, SL_HIT, EOD_CLOSED
         reason_display = reason.replace("_", " ")
-        
+
         logger.info(f"EXITED {pos['symbol']} at {ltp} (Reason: {reason}) | Net PnL: ₹{net_pnl:.2f}")
-        
-        # Place real broker exit order if live trading is active
+
+        # Place real broker exit order if live trading is active.
+        # Main startup currently blocks live mode until broker fill reconciliation exists.
         if self.real_order_manager:
             try:
                 self.real_order_manager.place_exit_order(pos_id, pos["symbol"], pos["token"], trade_type, quantity, segment, reason)
             except Exception as e:
                 logger.error(f"Error placing live exit order: {e}")
-        
-        if reason == "MANUAL_EXIT":
-            msg = (
-                f"🛑 **MANUAL EXIT**\n"
-                f"#{underlying} {opt_str}\n"
-                f"Exit: {ltp}"
-            )
-            if self.on_trade_callback:
-                self.on_trade_callback(msg, sig_data if sig_data else {})
+
+        exit_msg = (
+            f"{icon} **TRADE EXITED — {reason_display}**\n"
+            f"#{underlying} {opt_str}\n"
+            f"Entry: {entry_price}\n"
+            f"Exit: {ltp}\n"
+            f"Gross P&L: ₹{gross_pnl:.2f}\n"
+            f"Net P&L: ₹{net_pnl:.2f}"
+        )
+        if self.on_trade_callback:
+            callback_data = dict(sig_data) if sig_data else {}
+            callback_data["segment"] = segment
+            self.on_trade_callback(exit_msg, callback_data)
 
     def get_all_active_tokens_with_exchange(self) -> Dict[str, str]:
         tokens = {}
