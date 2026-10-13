@@ -33,10 +33,17 @@ def test_target_not_reached_in_recent_candles():
     result = check_recent_target_reached(mock_api, "NFO", "73921", 135.0, lookback_minutes=3)
     assert result is False  # Safe to trade
 
-def test_api_failure_handled_gracefully():
+def test_api_failure_is_unknown_and_must_not_be_treated_as_safe():
     mock_api = MagicMock()
     mock_api.getCandleData.side_effect = Exception("API rate limit or connection timeout")
-    
-    # Should not raise exception, but return False so normal flow continues
+
+    # Unknown history must not be treated as evidence that a signal is safe.
     result = check_recent_target_reached(mock_api, "NFO", "73921", 135.0, lookback_minutes=3)
-    assert result is False
+    assert result is None
+
+
+def test_empty_candle_history_is_unknown():
+    mock_api = MagicMock()
+    mock_api.getCandleData.return_value = {"status": True, "data": []}
+    result = check_recent_target_reached(mock_api, "NFO", "73921", 135.0, lookback_minutes=3)
+    assert result is None
