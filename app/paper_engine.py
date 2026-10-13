@@ -225,9 +225,14 @@ class PaperEngine:
         is_bfo_eod = current_minutes >= (15 * 60 + 30)  # 15:30 IST
         is_hz_eod = current_minutes >= (15 * 60 + 40)   # 15:40 IST
 
-        # 1. Close all active positions
+        # 1. Close all active positions. Rotate after a failed REST attempt so a position
+        # without quotes cannot starve every later position during repeated EOD cycles.
         with self.pos_manager._state_lock:
             pos_ids = list(self.pos_manager.active_positions.keys())
+        last_pos_id = self._last_position_rest_position_id
+        if last_pos_id in pos_ids:
+            last_index = pos_ids.index(last_pos_id)
+            pos_ids = pos_ids[last_index + 1:] + pos_ids[:last_index + 1]
         for pos_id in pos_ids:
             pos = self.pos_manager.active_positions.get(pos_id)
             if not pos: continue
