@@ -178,10 +178,20 @@ class PaperEngine:
             if ltp is None or ltp <= 0:
                 continue
 
-            # A REST response must not be persisted with a fabricated WebSocket timestamp.
+            # Persist the original WebSocket receipt timestamp, not the polling time.
+            # Otherwise an unchanged/stale tick would become "fresh" on every engine cycle.
             if price_source == "WEBSOCKET":
                 try:
-                    self.pos_manager.db.update_live_tick(token, pos["symbol"], ltp)
+                    raw_tick = self.md_cache.get_raw_tick(token) or {}
+                    received_ns = raw_tick.get("received_timestamp_ns")
+                    received_at = (
+                        datetime.fromtimestamp(received_ns / 1_000_000_000, timezone.utc).isoformat()
+                        if received_ns is not None
+                        else None
+                    )
+                    self.pos_manager.db.update_live_tick(
+                        token, pos["symbol"], ltp, updated_at=received_at
+                    )
                 except Exception:
                     logger.debug("Could not persist market tick for %s", pos["symbol"], exc_info=True)
 
